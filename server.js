@@ -11,7 +11,18 @@ const {
   UNIT_LABELS,
   isSlot,
   isUnit,
+  formatDate,
 } = require('./utils');
+const {
+  buildDigestHtml,
+  buildDigestText,
+  sendDigest,
+  buildSubject,
+  countMeals,
+  formatFriendlyDate,
+} = require('./email');
+
+const DIGEST_TZ = process.env.DIGEST_TZ || 'America/Chicago';
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.DB_PATH || './food.db';
@@ -111,7 +122,7 @@ const stmts = {
     SELECT
       p.id, p.date, p.slot, p.eater, p.recipe_id, p.free_text,
       p.status, p.notes, p.cooking_session_id, p.created_at,
-      r.title AS recipe_title
+      r.title AS recipe_title, r.source AS recipe_source, r.steps AS recipe_steps
     FROM planned_meals p
     LEFT JOIN recipes r ON r.id = p.recipe_id
     WHERE p.date >= @start AND p.date <= @end
@@ -156,6 +167,13 @@ const stmts = {
     UPDATE planned_meals SET cooking_session_id = NULL WHERE cooking_session_id = ?
   `),
   deleteCookingSession: db.prepare(`DELETE FROM cooking_sessions WHERE id = ?`),
+
+  // Digest dedupe
+  getDigestSent: db.prepare(`SELECT date, sent_at, resend_id FROM digests_sent WHERE date = ?`),
+  recordDigestSent: db.prepare(`
+    INSERT OR REPLACE INTO digests_sent (date, sent_at, resend_id)
+    VALUES (?, datetime('now'), ?)
+  `),
 };
 
 function toBool01(v) {
@@ -640,10 +658,74 @@ app.delete('/api/cooking-sessions/:id', (req, res) => {
   res.status(204).end();
 });
 
+// ── Morning digest ────────────────────────────────────────────────────────
+// Cron (GitHub Actions) POSTs here daily. Dedupe per date so the two workflow
+// triggers (one for CST, one for CDT) are naturally idempotent across DST.
+// preview=1 returns the HTML without sending (for eyeballing). force=1 resends
+// even if the date already sent. Otherwise a second send on the same date is
+// a no-op returning {skipped: true}.
+
+app.post('/api/send-digest', async (req, res, next) => {
+  try {
+    const preview = req.query.preview === '1';
+    const force = req.query.force === '1';
+    const date = formatDate(new Date(), DIGEST_TZ);
+
+    if (!preview && !force) {
+      const existing = stmts.getDigestSent.get(date);
+      if (existing) {
+        return res.json({
+          ok: true,
+          skipped: true,
+          reason: 'already sent today',
+          date,
+          sent_at: existing.sent_at,
+          resend_id: existing.resend_id,
+        });
+      }
+    }
+
+    const meals = stmts.listPlannedMealsInRange.all({ start: date, end: date }).map(hydrateMeal);
+
+    if (preview) {
+      const html = buildDigestHtml({ date, meals, tz: DIGEST_TZ });
+      const text = buildDigestText({ date, meals });
+      const subject = buildSubject(formatFriendlyDate(date, DIGEST_TZ), countMeals(meals));
+      return res.type('html').send(html
+        + `<!-- PREVIEW: subject=${subject.replace(/-->/g, '—')} -->`
+        + `<!-- PLAIN TEXT:\n${text.replace(/-->/g, '—')}\n-->`);
+    }
+
+    const { RESEND_API_KEY, DIGEST_FROM, DIGEST_TO } = process.env;
+    const result = await sendDigest({
+      date,
+      meals,
+      tz: DIGEST_TZ,
+      from: DIGEST_FROM,
+      to: DIGEST_TO,
+      apiKey: RESEND_API_KEY,
+    });
+
+    stmts.recordDigestSent.run(date, result.resendId || null);
+
+    res.json({
+      ok: true,
+      skipped: false,
+      date,
+      subject: result.subject,
+      meal_count: meals.length,
+      resend_id: result.resendId,
+      forced: force,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'internal server error' });
+  res.status(500).json({ error: String(err && err.message || err) });
 });
 
 app.listen(PORT, () => {

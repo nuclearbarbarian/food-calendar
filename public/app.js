@@ -677,9 +677,36 @@
       });
     }
     $('cal-cook').addEventListener('click', () => openCookModal());
+    $('cal-send-digest').addEventListener('click', handleSendDigest);
 
     initMealModal();
     initCookModal();
+  }
+
+  async function handleSendDigest() {
+    const btn = $('cal-send-digest');
+    if (btn.disabled) return;
+    if (!confirm("Send today's menu to Parke's inbox now?")) return;
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Sending…';
+    try {
+      const result = await api('POST', '/api/send-digest?force=1');
+      if (result.skipped) {
+        alert(`Already sent earlier today at ${result.sent_at} UTC.`);
+      } else {
+        alert(`Sent. ${result.meal_count} meals.\nSubject: ${result.subject}`);
+      }
+    } catch (err) {
+      console.error('Send digest failed', err);
+      const msg = err && err.data && err.data.error
+        ? err.data.error
+        : 'Could not send. Check the server logs.';
+      alert(`Send failed: ${msg}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   }
 
   function shiftFocus(direction) {

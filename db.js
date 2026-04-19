@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS shopping_lists (
   emailed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS digests_sent (
+  date TEXT PRIMARY KEY,
+  sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resend_id TEXT
+);
+
 CREATE TABLE IF NOT EXISTS shopping_list_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   list_id INTEGER NOT NULL,

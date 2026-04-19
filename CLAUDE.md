@@ -37,7 +37,7 @@ Three fixed: `breakfast`, `lunch`, `dinner`.
 - [x] Phase 0 — Foundation
 - [x] Phase 1 — Recipe cards
 - [x] Phase 2 — Calendar + meal planning (+ cooking session model)
-- [ ] Phase 3 — Morning email digest
+- [x] Phase 3 — Morning email digest
 - [ ] Phase 4 — Shopping list generator
 - [ ] Phase 5 — Bi-weekly menu scheduler
 - [ ] Phase 6 — Photo→recipe Claude Code skill
