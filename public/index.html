@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Food</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,600&family=Uncial+Antiqua&family=UnifrakturMaguntia&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css?v=1">
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1 class="app-title">Food</h1>
+      <span class="app-subtitle">a book of hours for the kitchen</span>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" role="tab" data-panel="calendar" aria-selected="true">Calendar</button>
+      <button class="tab" role="tab" data-panel="recipes" aria-selected="false">Recipes</button>
+      <button class="tab" role="tab" data-panel="menus" aria-selected="false">Menus</button>
+      <button class="tab" role="tab" data-panel="shopping" aria-selected="false">Shopping</button>
+    </nav>
+
+    <main>
+      <section id="panel-calendar" class="panel" role="tabpanel">
+        <div class="empty-state">
+          <div class="empty-state-ornament">✿ ❀ ✵ ❧ ✦</div>
+          <div class="empty-state-text">The calendar is being illuminated.</div>
+          <div class="empty-state-sub">Phase 2 brings the month, week, and day views.</div>
+        </div>
+      </section>
+
+      <section id="panel-recipes" class="panel" role="tabpanel" hidden>
+        <div class="empty-state">
+          <div class="empty-state-ornament">✿ ❀ ✵ ❧ ✦</div>
+          <div class="empty-state-text">Recipe cards are being drawn.</div>
+          <div class="empty-state-sub">Phase 1 brings the recipe library.</div>
+        </div>
+      </section>
+
+      <section id="panel-menus" class="panel" role="tabpanel" hidden>
+        <div class="empty-state">
+          <div class="empty-state-ornament">✿ ❀ ✵ ❧ ✦</div>
+          <div class="empty-state-text">Bi-weekly menus arrive later.</div>
+          <div class="empty-state-sub">Phase 5 brings the menu scheduler.</div>
+        </div>
+      </section>
+
+      <section id="panel-shopping" class="panel" role="tabpanel" hidden>
+        <div class="empty-state">
+          <div class="empty-state-ornament">✿ ❀ ✵ ❧ ✦</div>
+          <div class="empty-state-text">Shopping lists sprout from recipes.</div>
+          <div class="empty-state-sub">Phase 4 brings the generator.</div>
+        </div>
+      </section>
+    </main>
+
+    <div class="ornament" aria-hidden="true">✿ ❀ ✵ ❧ ✦ ❧ ✵ ❀ ✿</div>
+  </div>
+
+  <script src="/app.js?v=1"></script>
+</body>
+</html>

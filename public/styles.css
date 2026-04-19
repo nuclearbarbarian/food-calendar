@@ -1,0 +1,291 @@
+/* Food — design system tokens from ChoreCal (illuminated manuscript × kawaii). */
+
+:root {
+  /* Foundation */
+  --color-cream: #FFF8EE;
+  --color-warm-white: #FFFDF8;
+  --color-cocoa: #5B4A3F;
+  --color-soft-brown: #8B7B6B;
+  --color-latte: #D4C5B2;
+
+  /* Pastels */
+  --color-sakura: #F2A0B0;
+  --color-sakura-tint: #FDEDF0;
+  --color-mint: #8DD4A8;
+  --color-mint-tint: #E8F6EE;
+  --color-lavender: #B8A0D4;
+  --color-lavender-tint: #F0EBF6;
+  --color-sky: #8CBCE0;
+  --color-sky-tint: #E8F1F8;
+  --color-butter: #F0D070;
+  --color-butter-tint: #FCF5E0;
+  --color-peach: #F0B088;
+  --color-peach-tint: #FCEEE4;
+
+  /* Semantic */
+  --color-today: var(--color-sakura);
+  --color-today-bg: var(--color-sakura-tint);
+  --color-completed: var(--color-mint);
+  --color-overdue: var(--color-peach);
+  --color-important: var(--color-butter);
+  --color-info: var(--color-sky);
+  --color-accent: var(--color-lavender);
+  --color-error: #C45B5B;
+  --color-error-tint: #F8E8E8;
+
+  /* Eater colors (fixed mapping — do not reassign) */
+  --color-parke: var(--color-sakura);
+  --color-parke-tint: var(--color-sakura-tint);
+  --color-emmet: var(--color-sky);
+  --color-emmet-tint: var(--color-sky-tint);
+  --color-shared: var(--color-lavender);
+  --color-shared-tint: var(--color-lavender-tint);
+
+  /* Extended */
+  --color-cream-dark: #F0E6D4;
+  --color-blush: #FFF0F0;
+  --color-mist: #F0F4F8;
+
+  /* Typography */
+  --font-display: 'UnifrakturMaguntia', 'MedievalSharp', cursive;
+  --font-display-alt: 'Uncial Antiqua', serif;
+  --font-body: 'EB Garamond', 'Crimson Text', 'Georgia', serif;
+
+  /* Type scale */
+  --text-display: 36px;
+  --text-h1: 28px;
+  --text-h2: 20px;
+  --text-h3: 16px;
+  --text-body: 14px;
+  --text-small: 12px;
+  --text-date: 18px;
+  --text-date-sm: 14px;
+  --text-decorative: 22px;
+
+  /* Spacing */
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 9999px;
+
+  /* Borders */
+  --border-subtle: 1px solid var(--color-latte);
+  --border-default: 1px solid var(--color-latte);
+  --border-focus: 2px solid var(--color-sky);
+  --border-today: 2px solid var(--color-sakura);
+
+  /* Shadows */
+  --shadow-card: 0 2px 8px rgba(91, 74, 63, 0.08);
+  --shadow-modal: 0 4px 24px rgba(91, 74, 63, 0.12);
+  --shadow-tooltip: 0 2px 8px rgba(91, 74, 63, 0.2);
+
+  /* Transitions */
+  --transition-fast: 150ms ease-out;
+  --transition-normal: 250ms ease-out;
+  --transition-page: 300ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition-normal: 0ms;
+    --transition-page: 0ms;
+  }
+}
+
+/* Base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  color: var(--color-cocoa);
+  background-color: var(--color-cream);
+  min-height: 100vh;
+}
+
+h1, h2 {
+  font-family: var(--font-display);
+  line-height: 1.25;
+  font-weight: 400;
+}
+
+h3 {
+  font-family: var(--font-body);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+button {
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--color-cocoa);
+  background: var(--color-cream);
+  padding: var(--space-sm) var(--space-lg);
+  transition: background-color var(--transition-fast),
+              transform var(--transition-fast);
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+button:focus-visible {
+  outline: var(--border-focus);
+  outline-offset: 2px;
+}
+
+input, textarea, select {
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  color: var(--color-cocoa);
+  background-color: var(--color-cream);
+  border: var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  transition: border-color var(--transition-fast);
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border: var(--border-focus);
+}
+
+::placeholder {
+  color: var(--color-soft-brown);
+}
+
+/* App frame */
+
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--space-xl);
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: 0 var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-latte);
+}
+
+.app-title {
+  font-family: var(--font-display);
+  font-size: var(--text-display);
+  color: var(--color-cocoa);
+}
+
+.app-subtitle {
+  font-family: var(--font-display-alt);
+  font-size: var(--text-decorative);
+  color: var(--color-soft-brown);
+}
+
+/* Tabs */
+
+.tabs {
+  display: flex;
+  gap: var(--space-xs);
+  margin: var(--space-lg) 0 var(--space-xl);
+  padding: 0 var(--space-md);
+}
+
+.tab {
+  background: var(--color-warm-white);
+  border: var(--border-default);
+  border-radius: var(--radius-pill);
+  padding: var(--space-sm) var(--space-lg);
+  font-weight: 600;
+  color: var(--color-cocoa);
+  transition: background-color var(--transition-fast);
+}
+
+.tab:hover {
+  background: var(--color-cream-dark);
+}
+
+.tab.active {
+  background: var(--color-sakura-tint);
+  border-color: var(--color-sakura);
+}
+
+/* Panels */
+
+.panel {
+  background: var(--color-warm-white);
+  border: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-2xl);
+  min-height: 320px;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-3xl) var(--space-lg);
+  color: var(--color-soft-brown);
+}
+
+.empty-state-ornament {
+  font-size: var(--text-h1);
+  color: var(--color-sakura);
+  margin-bottom: var(--space-md);
+  letter-spacing: 8px;
+}
+
+.empty-state-text {
+  font-family: var(--font-display-alt);
+  font-size: var(--text-decorative);
+  color: var(--color-cocoa);
+  margin-bottom: var(--space-sm);
+}
+
+.empty-state-sub {
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  color: var(--color-soft-brown);
+}
+
+/* Ornament utility — small flower/star dividers per design system. */
+.ornament {
+  text-align: center;
+  color: var(--color-sakura);
+  letter-spacing: 12px;
+  padding: var(--space-lg) 0;
+  user-select: none;
+}
