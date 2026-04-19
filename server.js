@@ -688,9 +688,9 @@ app.post('/api/send-digest', async (req, res, next) => {
     const meals = stmts.listPlannedMealsInRange.all({ start: date, end: date }).map(hydrateMeal);
 
     if (preview) {
-      const html = buildDigestHtml({ date, meals, tz: DIGEST_TZ });
+      const html = buildDigestHtml({ date, meals });
       const text = buildDigestText({ date, meals });
-      const subject = buildSubject(formatFriendlyDate(date, DIGEST_TZ), countMeals(meals));
+      const subject = buildSubject(formatFriendlyDate(date), countMeals(meals));
       return res.type('html').send(html
         + `<!-- PREVIEW: subject=${subject.replace(/-->/g, '—')} -->`
         + `<!-- PLAIN TEXT:\n${text.replace(/-->/g, '—')}\n-->`);
@@ -700,7 +700,6 @@ app.post('/api/send-digest', async (req, res, next) => {
     const result = await sendDigest({
       date,
       meals,
-      tz: DIGEST_TZ,
       from: DIGEST_FROM,
       to: DIGEST_TO,
       apiKey: RESEND_API_KEY,

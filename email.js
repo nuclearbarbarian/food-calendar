@@ -43,7 +43,10 @@ function buildSubject(dateLabel, mealCount) {
   return `${dateLabel} — ${mealCount} meals planned`;
 }
 
-function formatFriendlyDate(isoDate, tz) {
+// The ISO date is already in DIGEST_TZ when it reaches us (computed upstream
+// via formatDate(new Date(), DIGEST_TZ)), so we format it as UTC here to avoid
+// a second timezone shift. No tz arg — don't pass one, it would be ignored.
+function formatFriendlyDate(isoDate) {
   const [y, m, d] = isoDate.split('-').map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
   return new Intl.DateTimeFormat('en-US', {
@@ -65,21 +68,19 @@ function groupByEater(meals) {
   return buckets;
 }
 
-function buildDigestHtml({ date, meals, tz }) {
-  const friendly = formatFriendlyDate(date, tz);
+function buildDigestHtml({ date, meals }) {
+  const friendly = formatFriendlyDate(date);
   const buckets = groupByEater(meals);
 
   const eaterSections = EATER_ORDER.map((eater) => {
     const list = buckets[eater];
-    if (list.length === 0) {
-      return ''; // Skip eaters with no meals today.
-    }
+    if (list.length === 0) return '';
     const tint = COLORS[`${eater}Tint`];
     const accent = COLORS[eater];
     const rows = list.map((meal) => renderMealRow(meal, accent)).join('');
     return `
-      <section style="margin-bottom: 28px;">
-        <h2 style="
+      <tr><td style="padding-bottom: 28px;">
+        <div style="
           font-family: Georgia, 'EB Garamond', serif;
           font-size: 18px;
           font-weight: 600;
@@ -89,63 +90,55 @@ function buildDigestHtml({ date, meals, tz }) {
           padding: 8px 14px;
           margin: 0 0 12px 0;
           border-radius: 4px;
-        ">
-          ${escapeHtml(EATER_LABELS[eater])}
-        </h2>
+        ">${escapeHtml(EATER_LABELS[eater])}</div>
         ${rows}
-      </section>
+      </td></tr>
     `;
   }).join('');
 
   const allEmpty = EATER_ORDER.every((e) => buckets[e].length === 0);
   const body = allEmpty
-    ? `<p style="color: ${COLORS.softBrown}; font-style: italic; margin: 24px 0;">
+    ? `<tr><td style="color: ${COLORS.softBrown}; font-style: italic; padding: 24px 0;">
          Nothing planned yet. Open the calendar to add meals.
-       </p>`
+       </td></tr>`
     : eaterSections;
 
-  const ornament = '✿ ❀ ✵ ❧ ✦';
+  // Wrap ornament in a symbol-friendly font stack so Outlook Desktop doesn't
+  // substitute a box or Wingdings glyph. Keeps the illuminated-manuscript vibe.
+  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.parke}; letter-spacing: 8px;`;
+  const ornament = `<span style="${ornamentStyle}">✿ ❀ ✵ ❧ ✦</span>`;
 
+  // Table-based layout: Outlook for Windows ignores max-width on <div>.
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Today's menu — ${escapeHtml(friendly)}</title>
 </head>
-<body style="
-  margin: 0;
-  padding: 24px;
-  background: ${COLORS.cream};
-  font-family: Georgia, 'EB Garamond', serif;
-  color: ${COLORS.cocoa};
-  line-height: 1.5;
-">
-  <div style="max-width: 560px; margin: 0 auto;">
-    <header style="text-align: center; padding-bottom: 16px; border-bottom: 1px solid ${COLORS.latte};">
-      <div style="color: ${COLORS.parke}; letter-spacing: 8px; font-size: 16px;">${ornament}</div>
-      <h1 style="
-        font-family: 'Times New Roman', serif;
-        font-weight: 400;
-        font-size: 28px;
-        margin: 8px 0 4px 0;
-        color: ${COLORS.cocoa};
-      ">
-        Today's Menu
-      </h1>
-      <p style="margin: 0; color: ${COLORS.softBrown}; font-size: 14px; letter-spacing: 0.5px;">
-        ${escapeHtml(friendly)}
-      </p>
-    </header>
-
-    <main style="padding-top: 20px;">
-      ${body}
-    </main>
-
-    <footer style="text-align: center; padding-top: 16px; border-top: 1px solid ${COLORS.latte}; color: ${COLORS.softBrown}; font-size: 12px;">
-      <div style="color: ${COLORS.parke}; letter-spacing: 8px; padding-bottom: 8px;">${ornament}</div>
-      From the Food calendar
-    </footer>
-  </div>
+<body style="margin:0;padding:0;background:${COLORS.cream};font-family:Georgia,'EB Garamond',serif;color:${COLORS.cocoa};line-height:1.5;-webkit-text-size-adjust:100%;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${COLORS.cream};">
+    <tr><td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+        <tr><td style="padding-bottom:16px;border-bottom:1px solid ${COLORS.latte};text-align:center;">
+          <div style="font-size:16px;">${ornament}</div>
+          <h1 style="font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:28px;margin:8px 0 4px 0;color:${COLORS.cocoa};">Today's Menu</h1>
+          <p style="margin:0;color:${COLORS.softBrown};font-size:14px;letter-spacing:0.5px;">
+            ${escapeHtml(friendly)}
+          </p>
+        </td></tr>
+        <tr><td style="padding-top:20px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            ${body}
+          </table>
+        </td></tr>
+        <tr><td style="padding-top:16px;border-top:1px solid ${COLORS.latte};color:${COLORS.softBrown};font-size:12px;text-align:center;">
+          <div style="font-size:14px;padding-bottom:6px;">${ornament}</div>
+          From the Food calendar
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
 </body>
 </html>`;
 }
@@ -168,17 +161,11 @@ function renderMealRow(meal, accent) {
     : '';
 
   // Inline dinner prep steps only; breakfast/lunch are usually self-evident.
+  // Split on newlines and emit <br>: pre-wrap is unreliable across Outlook/Gmail.
   const steps = meal.slot === 'dinner' && meal.recipe_steps && meal.recipe_steps.trim()
-    ? `<div style="
-         margin-top: 6px;
-         padding: 8px 12px;
-         background: ${COLORS.warmWhite};
-         border-left: 2px solid ${COLORS.latte};
-         font-size: 13px;
-         color: ${COLORS.cocoa};
-         white-space: pre-wrap;
-         line-height: 1.5;
-       ">${escapeHtml(meal.recipe_steps)}</div>`
+    ? `<div style="margin-top:6px;padding:8px 12px;background:${COLORS.warmWhite};border-left:2px solid ${COLORS.latte};font-size:13px;color:${COLORS.cocoa};line-height:1.5;">${
+         meal.recipe_steps.split(/\r?\n/).map((line) => escapeHtml(line)).join('<br>')
+       }</div>`
     : '';
 
   const notes = meal.notes && meal.notes.trim()
@@ -233,13 +220,13 @@ function buildDigestText({ date, meals }) {
   return lines.join('\n');
 }
 
-async function sendDigest({ date, meals, tz, from, to, apiKey }) {
+async function sendDigest({ date, meals, from, to, apiKey }) {
   if (!apiKey) throw new Error('RESEND_API_KEY is not set');
   if (!from || !to) throw new Error('DIGEST_FROM / DIGEST_TO not set');
 
-  const html = buildDigestHtml({ date, meals, tz });
+  const html = buildDigestHtml({ date, meals });
   const text = buildDigestText({ date, meals });
-  const subject = buildSubject(formatFriendlyDate(date, tz), countMeals(meals));
+  const subject = buildSubject(formatFriendlyDate(date), countMeals(meals));
 
   const resend = new Resend(apiKey);
   const { data, error } = await resend.emails.send({

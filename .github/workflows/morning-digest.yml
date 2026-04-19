@@ -1,14 +1,13 @@
 name: Morning digest
 
 # Two triggers give Parke 7 AM local year-round without DST bookkeeping:
-#   12:00 UTC = 7 AM CST (winter) / 6 AM CDT (summer)
-#   13:00 UTC = 8 AM CDT (summer) / 7 AM CST (the good one in winter? no, that's 7 AM CST match)
-# Actually: 13:00 UTC = 8 AM CST / 7 AM CDT.
+#   12:00 UTC = 6 AM CST (winter) / 7 AM CDT (summer)  ← lands at 7 AM in summer
+#   13:00 UTC = 7 AM CST (winter) / 8 AM CDT (summer)  ← lands at 7 AM in winter
 # Server-side dedupes per DIGEST_TZ date, so whichever trigger lands second is a no-op.
 on:
   schedule:
-    - cron: '0 12 * * *'   # 7 AM CST (winter)
-    - cron: '0 13 * * *'   # 7 AM CDT (summer)
+    - cron: '0 12 * * *'   # 7 AM CDT (summer)
+    - cron: '0 13 * * *'   # 7 AM CST (winter)
   workflow_dispatch:
 
 jobs:
@@ -20,15 +19,15 @@ jobs:
           AUTH_USER: ${{ secrets.BASIC_AUTH_USER }}
           AUTH_PASS: ${{ secrets.BASIC_AUTH_PASS }}
         run: |
-          response=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+          status=$(curl -sS -o /tmp/body.txt -w "%{http_code}" \
             -u "$AUTH_USER:$AUTH_PASS" \
             -X POST \
             https://parkes-food.fly.dev/api/send-digest)
-          body=$(echo "$response" | sed -n '1,/HTTP_STATUS/p' | sed '$d')
-          status=$(echo "$response" | grep HTTP_STATUS | cut -d: -f2)
           echo "Status: $status"
-          echo "Body: $body"
-          if [ "$status" -ne 200 ]; then
+          echo "Body:"
+          cat /tmp/body.txt
+          echo
+          if [ "$status" != "200" ]; then
             echo "::error::Digest request failed with status $status"
             exit 1
           fi
