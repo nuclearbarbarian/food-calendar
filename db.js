@@ -54,8 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_planned_meals_date ON planned_meals(date);
 -- as constraint errors instead of silent double-books.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_triple
   ON planned_meals(date, slot, eater);
-CREATE INDEX IF NOT EXISTS idx_planned_meals_session
-  ON planned_meals(cooking_session_id);
+-- idx_planned_meals_session is created in openDb() after the ALTER TABLE
+-- migration adds cooking_session_id to pre-existing databases.
 
 CREATE TABLE IF NOT EXISTS recipe_slots (
   recipe_id INTEGER NOT NULL,
@@ -143,6 +143,7 @@ function openDb(dbPath) {
   try {
     db.exec(`ALTER TABLE planned_meals ADD COLUMN cooking_session_id INTEGER REFERENCES cooking_sessions(id) ON DELETE SET NULL`);
   } catch (_) { /* column exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_planned_meals_session ON planned_meals(cooking_session_id)`);
 
   // Backfill recipe_slots from the legacy slot_categories JSON column.
   // Idempotent: skipped on any recipe whose slots are already in the join table.
