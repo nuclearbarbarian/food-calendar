@@ -45,5 +45,8 @@ Three fixed: `breakfast`, `lunch`, `dinner`.
 
 ## Deployment
 - Fly.io app: `parkes-food`
-- GitHub repo: `emmetpenney/food` (public)
+- GitHub repo: `nuclearbarbarian/food-calendar` (public)
 - Resend key: `food-prod` (separate from ChoreCal's and Shippingport's keys)
+- HTTP Basic Auth guards the production URL. Credentials in Fly secrets
+  (`BASIC_AUTH_USER`, `BASIC_AUTH_PASS`). Local dev runs without auth when
+  these env vars are absent. `/api/health` is exempt so Fly health checks work.

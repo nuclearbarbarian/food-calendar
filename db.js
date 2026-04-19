@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS recipes (
   steps TEXT,
   notes TEXT,
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS recipe_ingredients (
@@ -98,6 +99,14 @@ function openDb(dbPath) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  // Additive migrations. ALTER TABLE ADD COLUMN is the only safe operation
+  // against SQLite without a full rebuild — keep these idempotent.
+  try {
+    db.exec(`ALTER TABLE recipes ADD COLUMN updated_at TEXT`);
+  } catch (_) {
+    // Column exists — ignore.
+  }
+  db.exec(`UPDATE recipes SET updated_at = created_at WHERE updated_at IS NULL`);
   return db;
 }
 
