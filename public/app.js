@@ -572,6 +572,745 @@
     box.hidden = false;
   }
 
+  // ── Calendar ─────────────────────────────────────────────────────────────
+
+  // Date helpers. All dates are ISO strings (YYYY-MM-DD) in state; Date objects
+  // only exist inside helpers. Timezone bleed is avoided by constructing dates
+  // in UTC and computing with UTC accessors.
+
+  function isoToday() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function isoParse(s) {
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+
+  function isoFormat(d) {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function addDays(s, n) {
+    const d = isoParse(s);
+    d.setUTCDate(d.getUTCDate() + n);
+    return isoFormat(d);
+  }
+
+  function firstOfMonth(s) {
+    return s.slice(0, 8) + '01';
+  }
+
+  function monthLabel(s) {
+    const d = isoParse(s);
+    return d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  }
+
+  function dayNumber(s) {
+    return Number(s.slice(8, 10));
+  }
+
+  function dayOfWeek(s) {
+    return isoParse(s).getUTCDay(); // 0 = Sun
+  }
+
+  function prettyDateLabel(s) {
+    const d = isoParse(s);
+    return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  const SLOT_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
+  const SLOT_ORDER = { breakfast: 0, lunch: 1, dinner: 2 };
+  const EATER_LABELS = { parke: 'Parke', emmet: 'Emmet', shared: 'Shared' };
+
+  const cal = {
+    view: 'month',
+    focusDate: isoToday(),
+    meals: [],
+    selectedDate: null,
+    loadedRange: { start: '', end: '' },
+    today: isoToday(),
+  };
+
+  async function loadMealsForRange(start, end) {
+    const res = await fetch(`/api/planned-meals?start=${start}&end=${end}`);
+    if (!res.ok) throw new Error(`listMeals ${res.status}`);
+    cal.meals = await res.json();
+    cal.loadedRange = { start, end };
+  }
+
+  function mealsOnDate(date) {
+    const meals = cal.meals.filter((m) => m.date === date);
+    meals.sort((a, b) => SLOT_ORDER[a.slot] - SLOT_ORDER[b.slot] || a.id - b.id);
+    return meals;
+  }
+
+  function mealTitle(m) {
+    return m.recipe_id ? m.recipe_title || '(missing recipe)' : m.free_text || '(untitled)';
+  }
+
+  // ── Calendar header ──────────────────────────────────────────────────────
+
+  function initCalendar() {
+    $('cal-prev').addEventListener('click', () => shiftFocus(-1));
+    $('cal-next').addEventListener('click', () => shiftFocus(+1));
+    $('cal-today').addEventListener('click', () => {
+      cal.focusDate = isoToday();
+      cal.selectedDate = null;
+      renderCalendar();
+    });
+    for (const btn of $$('.view-pill')) {
+      btn.addEventListener('click', () => {
+        const view = btn.dataset.view;
+        if (cal.view === view) return;
+        cal.view = view;
+        cal.selectedDate = null;
+        for (const b of $$('.view-pill')) b.classList.toggle('active', b === btn);
+        renderCalendar();
+      });
+    }
+    $('cal-cook').addEventListener('click', () => openCookModal());
+
+    initMealModal();
+    initCookModal();
+  }
+
+  function shiftFocus(direction) {
+    if (cal.view === 'month') {
+      const d = isoParse(cal.focusDate);
+      // Snap day to 1 before shifting month, otherwise Jan 31 + 1 rolls to Mar 3
+      // because JS setUTCMonth overflows rather than clamping.
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() + direction);
+      cal.focusDate = isoFormat(d);
+    } else if (cal.view === 'week') {
+      cal.focusDate = addDays(cal.focusDate, direction * 7);
+    } else {
+      cal.focusDate = addDays(cal.focusDate, direction);
+    }
+    cal.selectedDate = null;
+    renderCalendar();
+  }
+
+  async function renderCalendar() {
+    cal.today = isoToday();
+
+    const title = $('cal-title');
+    const main = $('cal-main');
+    const side = $('cal-side');
+    const body = document.querySelector('.calendar-body');
+
+    main.innerHTML = '';
+
+    if (cal.view === 'month') {
+      const first = firstOfMonth(cal.focusDate);
+      const gridStart = addDays(first, -dayOfWeek(first));
+      const gridEnd = addDays(gridStart, 41);
+      title.textContent = monthLabel(cal.focusDate);
+      await loadMealsForRange(gridStart, gridEnd);
+      renderMonthView(main, first, gridStart);
+    } else if (cal.view === 'week') {
+      const weekStart = addDays(cal.focusDate, -dayOfWeek(cal.focusDate));
+      const weekEnd = addDays(weekStart, 6);
+      title.textContent = `${prettyDateLabel(weekStart)} — ${prettyDateLabel(weekEnd)}`;
+      await loadMealsForRange(weekStart, weekEnd);
+      renderWeekView(main, weekStart);
+    } else {
+      title.textContent = prettyDateLabel(cal.focusDate);
+      await loadMealsForRange(cal.focusDate, cal.focusDate);
+      renderDayView(main, cal.focusDate);
+    }
+
+    if (cal.selectedDate) {
+      body.classList.add('with-side');
+      side.hidden = false;
+      renderDayPanel(side, cal.selectedDate);
+    } else {
+      body.classList.remove('with-side');
+      side.hidden = true;
+    }
+  }
+
+  // ── Month view ───────────────────────────────────────────────────────────
+
+  function renderMonthView(main, monthStart, gridStart) {
+    const grid = el('div', { class: 'month-grid' });
+    const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    for (const dow of dows) {
+      grid.appendChild(el('div', { class: 'month-dow' }, dow));
+    }
+    const currentMonth = monthStart.slice(0, 7);
+    for (let i = 0; i < 42; i++) {
+      const date = addDays(gridStart, i);
+      const outOfMonth = date.slice(0, 7) !== currentMonth;
+      grid.appendChild(renderDayCell(date, { outOfMonth }));
+    }
+    main.appendChild(grid);
+  }
+
+  function renderDayCell(date, { outOfMonth } = {}) {
+    const classes = ['day-cell'];
+    if (outOfMonth) classes.push('out-of-month');
+    if (date === cal.today) classes.push('today');
+    if (date === cal.selectedDate) classes.push('selected');
+
+    const cell = el('div', {
+      class: classes.join(' '),
+      dataset: { date },
+      onclick: () => selectDate(date),
+    });
+
+    cell.appendChild(el('div', { class: 'day-number' }, String(dayNumber(date))));
+
+    const meals = mealsOnDate(date);
+    const chipsWrap = el('div', { class: 'day-chips' });
+    const visible = meals.slice(0, 3);
+    for (const meal of visible) {
+      chipsWrap.appendChild(renderChip(meal));
+    }
+    if (meals.length > visible.length) {
+      chipsWrap.appendChild(
+        el('div', { class: 'day-overflow' }, `+${meals.length - visible.length} more`)
+      );
+    }
+    cell.appendChild(chipsWrap);
+
+    // Drop target wiring for drag-to-reschedule.
+    cell.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      cell.classList.add('drop-target');
+    });
+    cell.addEventListener('dragleave', () => cell.classList.remove('drop-target'));
+    cell.addEventListener('drop', (e) => {
+      e.preventDefault();
+      cell.classList.remove('drop-target');
+      const mealId = Number(e.dataTransfer.getData('text/plain'));
+      if (mealId) rescheduleMeal(mealId, date);
+    });
+
+    return cell;
+  }
+
+  function renderChip(meal) {
+    const cls = ['meal-chip'];
+    if (meal.recipe_id) cls.push(`eater-${meal.eater}`);
+    else cls.push('free-text', `eater-${meal.eater}`);
+    if (meal.status === 'eaten') cls.push('eaten');
+
+    const chip = el(
+      'div',
+      {
+        class: cls.join(' '),
+        draggable: 'true',
+        title: `${EATER_LABELS[meal.eater]} · ${meal.slot} · ${mealTitle(meal)}`,
+      },
+      el('span', { class: 'slot-letter' }, SLOT_LETTERS[meal.slot]),
+      meal.cooking_session_id ? el('span', { class: 'session-glyph', 'aria-hidden': 'true' }, '🍳') : null,
+      el('span', { class: 'chip-body' }, mealTitle(meal))
+    );
+
+    // Rely on native drag/click semantics: a bare click opens edit; a drag
+    // suppresses the subsequent click. Chrome fires dragstart ~3-5px of movement
+    // and fires click only on a pure up-without-drag gesture.
+    let draggedFlag = false;
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (draggedFlag) { draggedFlag = false; return; }
+      openMealModal({ mode: 'edit', meal });
+    });
+    chip.addEventListener('dragstart', (e) => {
+      draggedFlag = true;
+      chip.classList.add('dragging');
+      e.dataTransfer.setData('text/plain', String(meal.id));
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('dragging');
+    });
+
+    return chip;
+  }
+
+  async function rescheduleMeal(mealId, newDate) {
+    const meal = cal.meals.find((m) => m.id === mealId);
+    if (!meal || meal.date === newDate) return;
+    try {
+      await api('PATCH', `/api/planned-meals/${mealId}`, { date: newDate });
+      await renderCalendar();
+    } catch (err) {
+      if (err.status === 409) {
+        alert('That day already has a meal for this slot and eater. Delete or move the existing one first.');
+      } else {
+        console.error('Reschedule failed', err);
+        alert('Could not move that meal. Try again?');
+      }
+    }
+  }
+
+  // ── Week view ────────────────────────────────────────────────────────────
+
+  function renderWeekView(main, weekStart) {
+    const grid = el('div', { class: 'week-grid' });
+    const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(weekStart, i);
+      const cls = ['week-day'];
+      if (date === cal.today) cls.push('today');
+      if (date === cal.selectedDate) cls.push('selected');
+      const day = el(
+        'div',
+        { class: cls.join(' '), onclick: () => selectDate(date) },
+        el(
+          'header',
+          { class: 'week-day-header' },
+          el('div', {}, dows[i]),
+          el('div', { class: 'week-day-number' }, String(dayNumber(date)))
+        )
+      );
+      const chipsWrap = el('div', { class: 'day-chips' });
+      for (const meal of mealsOnDate(date)) {
+        chipsWrap.appendChild(renderChip(meal));
+      }
+      day.appendChild(chipsWrap);
+      grid.appendChild(day);
+    }
+    main.appendChild(grid);
+  }
+
+  // ── Day view ─────────────────────────────────────────────────────────────
+
+  function renderDayView(main, date) {
+    const meals = mealsOnDate(date);
+    const grid = el('div', { class: 'day-view-grid' });
+    grid.appendChild(el('div', { class: 'day-view-header' }, ''));
+    for (const eater of ['parke', 'emmet', 'shared']) {
+      grid.appendChild(el('div', { class: 'day-view-header' }, EATER_LABELS[eater]));
+    }
+    for (const slot of ['breakfast', 'lunch', 'dinner']) {
+      grid.appendChild(
+        el('div', { class: 'day-view-slot-label' }, slot[0].toUpperCase() + slot.slice(1))
+      );
+      for (const eater of ['parke', 'emmet', 'shared']) {
+        const cell = el('div', { class: 'day-view-cell' });
+        const found = meals.find((m) => m.slot === slot && m.eater === eater);
+        if (found) {
+          cell.appendChild(renderMealSummary(found));
+        } else {
+          cell.appendChild(
+            el(
+              'button',
+              {
+                class: 'add-meal-btn',
+                onclick: () => openMealModal({ mode: 'create', date, slot, eater }),
+              },
+              '+ add'
+            )
+          );
+        }
+        grid.appendChild(cell);
+      }
+    }
+    main.appendChild(grid);
+  }
+
+  // ── Day side panel (month / week view sidebar) ──────────────────────────
+
+  function selectDate(date) {
+    cal.selectedDate = date;
+    renderCalendar();
+  }
+
+  function renderDayPanel(side, date) {
+    side.innerHTML = '';
+    side.appendChild(
+      el(
+        'header',
+        { class: 'side-header' },
+        el('h3', { class: 'side-date' }, prettyDateLabel(date)),
+        el(
+          'button',
+          {
+            class: 'side-close',
+            'aria-label': 'Close day panel',
+            onclick: () => { cal.selectedDate = null; renderCalendar(); },
+          },
+          '✕'
+        )
+      )
+    );
+
+    const meals = mealsOnDate(date);
+    for (const slot of ['breakfast', 'lunch', 'dinner']) {
+      const group = el(
+        'div',
+        { class: 'slot-group' },
+        el('div', { class: 'slot-group-title' }, slot[0].toUpperCase() + slot.slice(1))
+      );
+      for (const eater of ['parke', 'emmet', 'shared']) {
+        const found = meals.find((m) => m.slot === slot && m.eater === eater);
+        const row = el(
+          'div',
+          { class: 'eater-row' },
+          el('span', { class: `eater-label eater-${eater}-label` }, EATER_LABELS[eater]),
+          el(
+            'div',
+            { class: 'eater-slot-content' },
+            found
+              ? renderMealSummary(found)
+              : el(
+                  'button',
+                  {
+                    class: 'add-meal-btn',
+                    onclick: () => openMealModal({ mode: 'create', date, slot, eater }),
+                  },
+                  '+ add'
+                )
+          ),
+          found ? renderEatenToggle(found) : el('span', {})
+        );
+        group.appendChild(row);
+      }
+      side.appendChild(group);
+    }
+  }
+
+  function renderMealSummary(meal) {
+    return el(
+      'div',
+      {
+        class: `meal-summary${meal.status === 'eaten' ? ' eaten' : ''}`,
+        onclick: () => openMealModal({ mode: 'edit', meal }),
+      },
+      meal.cooking_session_id ? el('span', { 'aria-hidden': 'true' }, '🍳 ') : null,
+      el('span', { class: 'meal-summary-title' }, mealTitle(meal))
+    );
+  }
+
+  function renderEatenToggle(meal) {
+    return el(
+      'button',
+      {
+        class: `eaten-toggle${meal.status === 'eaten' ? ' on' : ''}`,
+        title: meal.status === 'eaten' ? 'Marked eaten — click to unmark' : 'Mark as eaten',
+        'aria-label': meal.status === 'eaten' ? 'Mark not eaten' : 'Mark eaten',
+        onclick: async (e) => {
+          e.stopPropagation();
+          const next = meal.status === 'eaten' ? 'planned' : 'eaten';
+          try {
+            await api('PATCH', `/api/planned-meals/${meal.id}`, { status: next });
+            await renderCalendar();
+          } catch (err) {
+            console.error(err);
+            alert('Could not update meal status.');
+          }
+        },
+      },
+      meal.status === 'eaten' ? '✓' : '○'
+    );
+  }
+
+  // ── Meal picker modal ────────────────────────────────────────────────────
+
+  let mealModalState = null; // { mode, date, slot, eater, mealId? }
+
+  function initMealModal() {
+    $('meal-save').addEventListener('click', handleMealSave);
+    $('meal-delete').addEventListener('click', handleMealDelete);
+    $('meal-recipe').addEventListener('change', () => {
+      if ($('meal-recipe').value) {
+        $('meal-free-text').value = '';
+      }
+    });
+    $('meal-free-text').addEventListener('input', () => {
+      if ($('meal-free-text').value.trim()) $('meal-recipe').value = '';
+    });
+    for (const btn of $$('#meal-free-row .quick-pill')) {
+      btn.addEventListener('click', () => {
+        $('meal-recipe').value = '';
+        $('meal-free-text').value = btn.dataset.quick;
+      });
+    }
+  }
+
+  async function openMealModal({ mode, date, slot, eater, meal }) {
+    let actual = { date, slot, eater };
+    let mealId = null;
+    let current = { recipeId: '', freeText: '', notes: '', status: 'planned' };
+    if (mode === 'edit' && meal) {
+      actual = { date: meal.date, slot: meal.slot, eater: meal.eater };
+      mealId = meal.id;
+      current = {
+        recipeId: meal.recipe_id ? String(meal.recipe_id) : '',
+        freeText: meal.free_text || '',
+        notes: meal.notes || '',
+        status: meal.status,
+      };
+    }
+    mealModalState = { mode, ...actual, mealId, originalStatus: current.status };
+
+    $('meal-title').textContent = mode === 'edit' ? 'Edit meal' : 'Plan a meal';
+    $('meal-delete').hidden = mode !== 'edit';
+
+    // Context badge — what are we planning?
+    const ctx = $('meal-context');
+    ctx.innerHTML = '';
+    ctx.appendChild(el('span', { class: `meal-context-badge eater-${actual.eater}-label` }, EATER_LABELS[actual.eater]));
+    ctx.appendChild(el('span', {}, `· ${actual.slot} · ${prettyDateLabel(actual.date)}`));
+
+    // Populate recipe dropdown (filtered to this slot).
+    const sel = $('meal-recipe');
+    sel.innerHTML = '<option value="">— Free text / leftovers / eating out —</option>';
+    try {
+      // Include inactive in edit mode so a deactivated recipe the meal still
+      // references stays selectable. In create mode only show active recipes.
+      const params = new URLSearchParams({ slot: actual.slot });
+      if (mode === 'edit') params.set('include_inactive', '1');
+      const recipes = await api('GET', `/api/recipes?${params.toString()}`);
+      recipes.sort((a, b) => a.title.localeCompare(b.title));
+      let foundCurrent = false;
+      for (const r of recipes) {
+        const opt = el('option', { value: String(r.id) }, r.title + (r.active ? '' : ' (deactivated)'));
+        if (String(r.id) === current.recipeId) { opt.selected = true; foundCurrent = true; }
+        sel.appendChild(opt);
+      }
+      // If the meal's recipe exists but was filtered out (e.g. slot tag changed),
+      // fetch it standalone and pin it so we don't silently clear the selection.
+      if (current.recipeId && !foundCurrent) {
+        try {
+          const r = await api('GET', `/api/recipes/${current.recipeId}`);
+          const opt = el('option', { value: String(r.id) }, `${r.title} (not in ${actual.slot} anymore)`);
+          opt.selected = true;
+          sel.appendChild(opt);
+        } catch (_) { /* recipe hard-deleted — leave unselected */ }
+      }
+    } catch (err) {
+      console.error('Load recipes failed', err);
+    }
+
+    $('meal-free-text').value = current.freeText;
+    $('meal-notes').value = current.notes;
+    $('meal-errors').hidden = true;
+    $('meal-errors').textContent = '';
+
+    showModal('meal-modal');
+    sel.focus();
+  }
+
+  async function handleMealSave() {
+    if (!mealModalState) return;
+    const btn = $('meal-save');
+    if (btn.disabled) return;
+
+    const recipeId = $('meal-recipe').value;
+    const freeText = $('meal-free-text').value.trim();
+    const notes = $('meal-notes').value.trim() || null;
+
+    if (!recipeId && !freeText) {
+      return showMealError(['Pick a recipe or type a free-text meal.']);
+    }
+    if (recipeId && freeText) {
+      return showMealError(['Choose either a recipe or free text — not both.']);
+    }
+
+    btn.disabled = true;
+    try {
+      if (mealModalState.mode === 'create') {
+        const body = {
+          date: mealModalState.date,
+          slot: mealModalState.slot,
+          eater: mealModalState.eater,
+          notes,
+        };
+        if (recipeId) body.recipe_id = Number(recipeId);
+        else body.free_text = freeText;
+        await api('POST', '/api/planned-meals', body);
+      } else {
+        const body = { notes };
+        if (recipeId) body.recipe_id = Number(recipeId);
+        else body.free_text = freeText;
+        await api('PATCH', `/api/planned-meals/${mealModalState.mealId}`, body);
+      }
+      hideModal('meal-modal');
+      await renderCalendar();
+    } catch (err) {
+      showMealError(extractErrorMessages(err));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function extractErrorMessages(err) {
+    if (err && err.data) {
+      if (Array.isArray(err.data.errors)) return err.data.errors;
+      if (err.data.error) return [err.data.error];
+    }
+    return ['Save failed. Try again?'];
+  }
+
+  async function handleMealDelete() {
+    if (!mealModalState || mealModalState.mode !== 'edit') return;
+    if (!confirm('Delete this meal from the calendar?')) return;
+    const btn = $('meal-delete');
+    btn.disabled = true;
+    try {
+      await api('DELETE', `/api/planned-meals/${mealModalState.mealId}`);
+      hideModal('meal-modal');
+      await renderCalendar();
+    } catch (err) {
+      console.error(err);
+      showMealError(['Delete failed.']);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function showMealError(msgs) {
+    const box = $('meal-errors');
+    box.innerHTML = '';
+    for (const m of msgs) box.appendChild(el('div', {}, m));
+    box.hidden = false;
+  }
+
+  // ── Cooking session modal ────────────────────────────────────────────────
+
+  function initCookModal() {
+    $('cook-add-serves').addEventListener('click', () => addServesRow());
+    $('cook-save').addEventListener('click', handleCookSave);
+    $('cook-recipe').addEventListener('change', () => {
+      if ($('cook-recipe').value) $('cook-free-text').value = '';
+    });
+    $('cook-free-text').addEventListener('input', () => {
+      if ($('cook-free-text').value.trim()) $('cook-recipe').value = '';
+    });
+  }
+
+  async function openCookModal() {
+    const today = isoToday();
+    $('cook-date').value = today;
+    $('cook-slot').value = 'dinner';
+    $('cook-free-text').value = '';
+    $('cook-notes').value = '';
+    $('cook-errors').hidden = true;
+    $('cook-errors').textContent = '';
+
+    const sel = $('cook-recipe');
+    sel.innerHTML = '<option value="">— Free text / leftovers —</option>';
+    try {
+      const recipes = await api('GET', '/api/recipes');
+      recipes.sort((a, b) => a.title.localeCompare(b.title));
+      for (const r of recipes) {
+        sel.appendChild(el('option', { value: String(r.id) }, r.title));
+      }
+    } catch (err) {
+      console.error('Load recipes failed', err);
+    }
+
+    $('cook-serves-rows').innerHTML = '';
+    // Default: two serve rows for shared dinner on cook date and the next day.
+    addServesRow({ date: today, slot: 'dinner', eater: 'shared' });
+    addServesRow({ date: addDays(today, 1), slot: 'dinner', eater: 'shared' });
+
+    showModal('cook-modal');
+    sel.focus();
+  }
+
+  function addServesRow(prefill) {
+    const rows = $('cook-serves-rows');
+    const dateInput = el('input', {
+      type: 'date',
+      value: prefill ? prefill.date : $('cook-date').value,
+    });
+    const slotSel = el('select', {});
+    for (const s of ['breakfast', 'lunch', 'dinner']) {
+      const opt = el('option', { value: s }, s[0].toUpperCase() + s.slice(1));
+      if (prefill && prefill.slot === s) opt.selected = true;
+      else if (!prefill && s === 'dinner') opt.selected = true;
+      slotSel.appendChild(opt);
+    }
+    const eaterSel = el('select', {});
+    for (const e of ['parke', 'emmet', 'shared']) {
+      const opt = el('option', { value: e }, EATER_LABELS[e]);
+      if (prefill && prefill.eater === e) opt.selected = true;
+      else if (!prefill && e === 'shared') opt.selected = true;
+      eaterSel.appendChild(opt);
+    }
+    const row = el(
+      'div',
+      { class: 'serves-row' },
+      dateInput,
+      slotSel,
+      eaterSel,
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'serves-remove',
+          'aria-label': 'Remove meal',
+          onclick: () => row.remove(),
+        },
+        '✕'
+      )
+    );
+    rows.appendChild(row);
+  }
+
+  async function handleCookSave() {
+    const btn = $('cook-save');
+    if (btn.disabled) return;
+    const errors = [];
+    const recipeId = $('cook-recipe').value;
+    const freeText = $('cook-free-text').value.trim();
+    if (!recipeId && !freeText) errors.push('Pick a recipe or type free text.');
+    if (recipeId && freeText) errors.push('Choose either a recipe or free text.');
+    const cookDate = $('cook-date').value;
+    if (!cookDate) errors.push('Pick a cook date.');
+    const cookSlot = $('cook-slot').value;
+
+    const serves = $$('.serves-row', $('cook-serves-rows'))
+      .map((row) => {
+        const [dateInput, slotSel, eaterSel] = row.querySelectorAll('input, select');
+        return { date: dateInput.value, slot: slotSel.value, eater: eaterSel.value };
+      })
+      .filter((s) => s.date);
+    if (serves.length === 0) errors.push('Add at least one meal the cooking feeds.');
+
+    if (errors.length) return showCookError(errors);
+
+    const body = {
+      cook_date: cookDate,
+      cook_slot: cookSlot,
+      notes: $('cook-notes').value.trim() || null,
+      serves,
+    };
+    if (recipeId) body.recipe_id = Number(recipeId);
+    else body.free_text = freeText;
+
+    btn.disabled = true;
+    try {
+      await api('POST', '/api/cooking-sessions', body);
+      hideModal('cook-modal');
+      await renderCalendar();
+    } catch (err) {
+      showCookError(extractErrorMessages(err));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function showCookError(msgs) {
+    const box = $('cook-errors');
+    box.innerHTML = '';
+    for (const m of msgs) box.appendChild(el('div', {}, m));
+    box.hidden = false;
+  }
+
   // ── Modal controller ─────────────────────────────────────────────────────
 
   function showModal(id) {
@@ -611,8 +1350,18 @@
     initFilters();
     initEditModal();
     initDetailModal();
+    initCalendar();
     initModalDismiss();
     renderLibrary();
+    // Render calendar lazily on first visit.
+    let calendarRendered = false;
+    const calTab = document.querySelector('.tab[data-panel="calendar"]');
+    calTab.addEventListener('click', () => {
+      if (!calendarRendered) {
+        calendarRendered = true;
+        renderCalendar().catch((err) => console.error('Calendar render failed:', err));
+      }
+    });
   }
 
   init().catch((err) => {

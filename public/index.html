@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,600&family=Uncial+Antiqua&family=UnifrakturMaguntia&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=3">
+  <link rel="stylesheet" href="/styles.css?v=4">
 </head>
 <body>
   <div class="app">
@@ -25,10 +25,23 @@
 
     <main>
       <section id="panel-calendar" class="panel" role="tabpanel" hidden>
-        <div class="empty-state">
-          <div class="empty-state-ornament" aria-hidden="true">✿ ❀ ✵ ❧ ✦</div>
-          <div class="empty-state-text">The calendar is being illuminated.</div>
-          <div class="empty-state-sub">Phase 2 brings the month, week, and day views.</div>
+        <header class="calendar-header">
+          <div class="calendar-nav">
+            <button id="cal-prev" class="cal-arrow" aria-label="Previous">◀</button>
+            <h2 id="cal-title" class="calendar-title"></h2>
+            <button id="cal-next" class="cal-arrow" aria-label="Next">▶</button>
+          </div>
+          <div class="calendar-views">
+            <button class="view-pill active" data-view="month">Month</button>
+            <button class="view-pill" data-view="week">Week</button>
+            <button class="view-pill" data-view="day">Day</button>
+          </div>
+          <button id="cal-today" class="btn-ghost">Today</button>
+          <button id="cal-cook" class="btn-primary">+ Cook once, eat many</button>
+        </header>
+        <div class="calendar-body">
+          <div id="cal-main" class="calendar-main"></div>
+          <aside id="cal-side" class="calendar-side" hidden></aside>
         </div>
       </section>
 
@@ -165,6 +178,105 @@
     </div>
   </div>
 
-  <script src="/app.js?v=3"></script>
+  <!-- Meal picker modal -->
+  <div id="meal-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="meal-title">
+      <header class="modal-header">
+        <h2 id="meal-title" class="modal-title">Plan a meal</h2>
+        <button class="modal-close" data-close-modal aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="meal-context" id="meal-context"></div>
+
+        <div class="form-row">
+          <span class="form-label">Recipe</span>
+          <select id="meal-recipe" class="meal-recipe-select">
+            <option value="">— Free text / leftovers / eating out —</option>
+          </select>
+        </div>
+
+        <div class="form-row" id="meal-free-row">
+          <span class="form-label">Or type something</span>
+          <div class="quick-pills">
+            <button type="button" class="quick-pill" data-quick="Leftovers">♻ Leftovers</button>
+            <button type="button" class="quick-pill" data-quick="Eating out">☕ Eating out</button>
+            <button type="button" class="quick-pill" data-quick="Sandwich">🥪 Sandwich</button>
+          </div>
+          <input id="meal-free-text" type="text" maxlength="200" placeholder="e.g., takeout, cereal, pb&j">
+        </div>
+
+        <div class="form-row">
+          <label for="meal-notes">Notes <span class="form-hint">(optional)</span></label>
+          <textarea id="meal-notes" rows="2" maxlength="1000"></textarea>
+        </div>
+
+        <div id="meal-errors" class="form-errors" hidden></div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" id="meal-delete" class="btn-ghost btn-danger" hidden>Delete</button>
+        <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+        <button type="button" id="meal-save" class="btn-primary footer-end">Save meal</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Cooking session modal -->
+  <div id="cook-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="cook-title">
+      <header class="modal-header">
+        <h2 id="cook-title" class="modal-title">Cook once, eat many</h2>
+        <button class="modal-close" data-close-modal aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <p class="cook-intro">One cooking session feeds multiple meals. Pick what you're cooking, when, and which meals it covers.</p>
+
+        <div class="form-row">
+          <span class="form-label">Recipe</span>
+          <select id="cook-recipe" class="meal-recipe-select">
+            <option value="">— Free text / leftovers —</option>
+          </select>
+        </div>
+
+        <div class="form-row" id="cook-free-row">
+          <label for="cook-free-text">Or free text</label>
+          <input id="cook-free-text" type="text" maxlength="200" placeholder="e.g., big pot of chili">
+        </div>
+
+        <div class="form-row form-row-inline">
+          <label for="cook-date" class="form-label-inline">Cook date</label>
+          <input id="cook-date" type="date">
+          <label for="cook-slot" class="form-label-inline">Slot</label>
+          <select id="cook-slot">
+            <option value="breakfast">Breakfast</option>
+            <option value="lunch">Lunch</option>
+            <option value="dinner" selected>Dinner</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label-row">
+            <span class="form-label">Feeds these meals</span>
+            <button type="button" id="cook-add-serves" class="btn-ghost-sm">+ Add meal</button>
+          </div>
+          <div id="cook-serves-rows" class="cook-serves-rows"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="cook-notes">Notes <span class="form-hint">(optional)</span></label>
+          <textarea id="cook-notes" rows="2" maxlength="1000"></textarea>
+        </div>
+
+        <div id="cook-errors" class="form-errors" hidden></div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+        <button type="button" id="cook-save" class="btn-primary footer-end">Create cooking session</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/app.js?v=4"></script>
 </body>
 </html>

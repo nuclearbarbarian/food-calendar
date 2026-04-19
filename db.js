@@ -38,6 +38,40 @@ CREATE TABLE IF NOT EXISTS planned_meals (
   free_text TEXT,
   status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'eaten')),
   notes TEXT,
+  cooking_session_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (
+    (recipe_id IS NOT NULL AND free_text IS NULL)
+    OR (recipe_id IS NULL AND free_text IS NOT NULL)
+  ),
+  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL,
+  FOREIGN KEY (cooking_session_id) REFERENCES cooking_sessions(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_planned_meals_date ON planned_meals(date);
+-- A (date, slot, eater) triple is the logical unique key for planned meals.
+-- The UI, cooking-session materialize, and Phase 5 menu apply all assume
+-- at most one meal per cell. Enforce at the DB so duplicate writes surface
+-- as constraint errors instead of silent double-books.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_triple
+  ON planned_meals(date, slot, eater);
+CREATE INDEX IF NOT EXISTS idx_planned_meals_session
+  ON planned_meals(cooking_session_id);
+
+CREATE TABLE IF NOT EXISTS recipe_slots (
+  recipe_id INTEGER NOT NULL,
+  slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner')),
+  PRIMARY KEY (recipe_id, slot),
+  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_recipe_slots_slot ON recipe_slots(slot);
+
+CREATE TABLE IF NOT EXISTS cooking_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cook_date TEXT NOT NULL,
+  cook_slot TEXT NOT NULL CHECK (cook_slot IN ('breakfast', 'lunch', 'dinner')),
+  recipe_id INTEGER,
+  free_text TEXT,
+  notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (
     (recipe_id IS NOT NULL AND free_text IS NULL)
@@ -45,7 +79,7 @@ CREATE TABLE IF NOT EXISTS planned_meals (
   ),
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_planned_meals_date ON planned_meals(date);
+CREATE INDEX IF NOT EXISTS idx_cooking_sessions_cook_date ON cooking_sessions(cook_date);
 
 CREATE TABLE IF NOT EXISTS menus (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,10 +137,35 @@ function openDb(dbPath) {
   // against SQLite without a full rebuild — keep these idempotent.
   try {
     db.exec(`ALTER TABLE recipes ADD COLUMN updated_at TEXT`);
-  } catch (_) {
-    // Column exists — ignore.
-  }
+  } catch (_) { /* column exists */ }
   db.exec(`UPDATE recipes SET updated_at = created_at WHERE updated_at IS NULL`);
+
+  try {
+    db.exec(`ALTER TABLE planned_meals ADD COLUMN cooking_session_id INTEGER REFERENCES cooking_sessions(id) ON DELETE SET NULL`);
+  } catch (_) { /* column exists */ }
+
+  // Backfill recipe_slots from the legacy slot_categories JSON column.
+  // Idempotent: skipped on any recipe whose slots are already in the join table.
+  const backfill = db.transaction(() => {
+    const rows = db.prepare(`
+      SELECT r.id, r.slot_categories
+      FROM recipes r
+      WHERE NOT EXISTS (SELECT 1 FROM recipe_slots s WHERE s.recipe_id = r.id)
+    `).all();
+    const insert = db.prepare(`INSERT OR IGNORE INTO recipe_slots (recipe_id, slot) VALUES (?, ?)`);
+    for (const row of rows) {
+      let slots = [];
+      try { slots = JSON.parse(row.slot_categories || '[]'); } catch (_) { slots = []; }
+      if (!Array.isArray(slots)) continue;
+      for (const slot of slots) {
+        if (slot === 'breakfast' || slot === 'lunch' || slot === 'dinner') {
+          insert.run(row.id, slot);
+        }
+      }
+    }
+  });
+  backfill();
+
   return db;
 }
 

@@ -35,8 +35,8 @@ Three fixed: `breakfast`, `lunch`, `dinner`.
 
 ## Phase tracker
 - [x] Phase 0 — Foundation
-- [ ] Phase 1 — Recipe cards
-- [ ] Phase 2 — Calendar + meal planning (+ cooking session model)
+- [x] Phase 1 — Recipe cards
+- [x] Phase 2 — Calendar + meal planning (+ cooking session model)
 - [ ] Phase 3 — Morning email digest
 - [ ] Phase 4 — Shopping list generator
 - [ ] Phase 5 — Bi-weekly menu scheduler
