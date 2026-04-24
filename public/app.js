@@ -639,6 +639,9 @@
     today: isoToday(),
   };
 
+  // Module-level so the menu-apply flow can check whether to refresh.
+  let calendarRendered = false;
+
   async function loadMealsForRange(start, end) {
     const res = await fetch(`/api/planned-meals?start=${start}&end=${end}`);
     if (!res.ok) throw new Error(`listMeals ${res.status}`);
@@ -1069,7 +1072,7 @@
     }
   }
 
-  async function openMealModal({ mode, date, slot, eater, meal, context, hideNotes, saveHandler, deleteHandler, title }) {
+  async function openMealModal({ mode, date, slot, eater, meal, context, hideNotes, saveHandler, deleteHandler, title, dateLabel }) {
     let actual = { date, slot, eater };
     let mealId = null;
     let current = { recipeId: '', freeText: '', notes: '', status: 'planned' };
@@ -1085,6 +1088,11 @@
     }
     mealModalState = {
       mode, ...actual, mealId, originalStatus: current.status,
+      // For the menu context, `date` is synthetic (e.g. "Week 1 Mon"); the
+      // caller provides a human label via `dateLabel`. Calendar context uses
+      // an ISO date directly. Downstream code should use `date` for ISO and
+      // `dateLabel` for display.
+      dateLabel: dateLabel || (context === 'menu' ? actual.date : null),
       context: context || 'calendar',
       hideNotes: !!hideNotes,
       saveHandler: saveHandler || null,
@@ -1104,7 +1112,7 @@
     ctx.innerHTML = '';
     ctx.appendChild(el('span', { class: `meal-context-badge eater-${actual.eater}-label` }, EATER_LABELS[actual.eater]));
     const contextSuffix = mealModalState.context === 'menu'
-      ? ` · ${actual.slot} · ${actual.date}`  // date here is already a human label like "Week 1 Mon"
+      ? ` · ${actual.slot} · ${mealModalState.dateLabel}`
       : ` · ${actual.slot} · ${prettyDateLabel(actual.date)}`;
     ctx.appendChild(el('span', {}, contextSuffix));
 
@@ -2120,7 +2128,7 @@
         const content = el('div', { class: 'eater-slot-content' });
         if (found) {
           const title = found.recipe_id
-            ? (menus.editing.slots_recipe_titles && menus.editing.slots_recipe_titles[found.recipe_id]) || found.recipe_title || `recipe #${found.recipe_id}`
+            ? (found.recipe_title || `recipe #${found.recipe_id}`)
             : found.free_text || '(untitled)';
           content.appendChild(
             el(
@@ -2167,7 +2175,8 @@
 
     openMealModal({
       mode: existing ? 'edit' : 'create',
-      date: dayLabel,  // used only for the context label
+      date: null,       // no ISO date in menu context — menu slots are template-level
+      dateLabel: dayLabel,
       slot,
       eater,
       meal,
@@ -2208,28 +2217,15 @@
       free_text: s.free_text,
     }));
     try {
-      const result = await api('PUT', `/api/menus/${menu.id}/slots`, { slots: payload });
-      // Refresh slot titles (server returns recipe_title-less rows; refetch for titles)
+      await api('PUT', `/api/menus/${menu.id}/slots`, { slots: payload });
+      // Refetch — server JOINs recipes so each slot comes back with its title.
+      // No separate library fetch needed.
       const full = await api('GET', `/api/menus/${menu.id}`);
       menu.slots = full.slots;
-      // Hydrate recipe titles so the day panel can display them
-      await hydrateMenuSlotTitles(menu);
       menus.dirty = false;
       renderMenuEditor();
     } catch (err) {
       alert('Menu save failed: ' + (err.data && err.data.errors ? err.data.errors.join(', ') : 'unknown'));
-    }
-  }
-
-  async function hydrateMenuSlotTitles(menu) {
-    const needed = new Set(menu.slots.filter((s) => s.recipe_id).map((s) => s.recipe_id));
-    if (needed.size === 0) return;
-    // Bulk fetch via the existing listRecipes endpoint (includes titles + ids).
-    const all = await api('GET', '/api/recipes?include_inactive=1');
-    const titleMap = Object.create(null);
-    for (const r of all) titleMap[r.id] = r.title;
-    for (const s of menu.slots) {
-      if (s.recipe_id) s.recipe_title = titleMap[s.recipe_id] || null;
     }
   }
 
@@ -2280,8 +2276,17 @@
     try {
       const result = await api('POST', `/api/menus/${menu.id}/apply`, body);
       hideModal('menu-apply-modal');
-      const skippedNote = result.skipped ? ` (${result.skipped} skipped)` : '';
-      alert(`Applied ${result.applied} meal${result.applied === 1 ? '' : 's'}${skippedNote}.`);
+      if (result.applied === 0 && result.skipped === 0) {
+        alert("This menu has no filled slots yet. Add meals to the day grid, then apply.");
+      } else {
+        const skippedNote = result.skipped ? ` (${result.skipped} skipped)` : '';
+        alert(`Applied ${result.applied} meal${result.applied === 1 ? '' : 's'}${skippedNote}.`);
+      }
+      // If the calendar was previously rendered, refresh it so the newly
+      // materialized meals show up without requiring a tab-switch-and-back.
+      if (calendarRendered) {
+        renderCalendar().catch((e) => console.error('Calendar refresh failed:', e));
+      }
     } catch (err) {
       if (err.status === 409 && err.data && Array.isArray(err.data.conflicts)) {
         renderApplyConflicts(err.data.conflicts);
@@ -2296,13 +2301,14 @@
     $('apply-conflicts').hidden = false;
     const word = conflicts.length === 1 ? 'conflict' : 'conflicts';
     $('conflict-intro').textContent = `${conflicts.length} ${word} with existing meals. Pick how to resolve:`;
-    const titleById = new Map(state.recipes.map((r) => [r.id, r.title]));
     const list = $('conflict-list');
     list.innerHTML = '';
     for (const c of conflicts.slice(0, 50)) {
       const existingTitle = c.existing.recipe_title || c.existing.free_text || '(untitled)';
+      // Server attaches recipe_title to c.incoming so deactivated recipes
+      // and recipes outside state.recipes still show their name.
       const incomingTitle = c.incoming.recipe_id
-        ? (titleById.get(c.incoming.recipe_id) || `recipe ${c.incoming.recipe_id}`)
+        ? (c.incoming.recipe_title || `recipe ${c.incoming.recipe_id}`)
         : (c.incoming.free_text || '(empty)');
       list.appendChild(
         el(
@@ -2386,7 +2392,6 @@
     initModalDismiss();
     renderLibrary();
     // Lazy render on first visit so we don't network on boot.
-    let calendarRendered = false;
     document.querySelector('.tab[data-panel="calendar"]').addEventListener('click', () => {
       if (!calendarRendered) {
         calendarRendered = true;

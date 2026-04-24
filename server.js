@@ -236,10 +236,14 @@ const stmts = {
     SELECT id, name, active, created_at FROM menus WHERE id = ?
   `),
   getMenuSlots: db.prepare(`
-    SELECT id, menu_id, day_of_cycle, slot, eater, recipe_id, free_text
-    FROM menu_slots
-    WHERE menu_id = ?
-    ORDER BY day_of_cycle, slot, eater
+    SELECT
+      s.id, s.menu_id, s.day_of_cycle, s.slot, s.eater,
+      s.recipe_id, s.free_text,
+      r.title AS recipe_title
+    FROM menu_slots s
+    LEFT JOIN recipes r ON r.id = s.recipe_id
+    WHERE s.menu_id = ?
+    ORDER BY s.day_of_cycle, s.slot, s.eater
   `),
   getFilledMenuSlots: db.prepare(`
     SELECT day_of_cycle, slot, eater, recipe_id, free_text
@@ -831,12 +835,23 @@ app.patch('/api/menus/:id', (req, res) => {
   const existing = stmts.getMenu.get(id);
   if (!existing) return res.status(404).json({ error: 'menu not found' });
   const body = req.body || {};
-  if (typeof body.name === 'string' && body.name.trim()) {
-    stmts.renameMenu.run({ id, name: body.name.trim().slice(0, MAX_MENU_NAME) });
+  const errors = [];
+
+  let didChange = false;
+  if (body.name !== undefined) {
+    if (typeof body.name !== 'string' || !body.name.trim()) {
+      errors.push('name cannot be empty');
+    } else {
+      stmts.renameMenu.run({ id, name: body.name.trim().slice(0, MAX_MENU_NAME) });
+      didChange = true;
+    }
   }
   if (body.active !== undefined) {
     stmts.setMenuActive.run(toBool01(body.active), id);
+    didChange = true;
   }
+  if (errors.length) return res.status(400).json({ errors });
+  if (!didChange) return res.status(400).json({ error: 'provide name or active to update' });
   res.json(hydrateMenu(stmts.getMenu.get(id)));
 });
 
@@ -924,10 +939,30 @@ app.post('/api/menus/:id/apply', (req, res) => {
   const existingByKey = new Map();
   for (const p of existing) existingByKey.set(`${p.date}|${p.slot}|${p.eater}`, p);
 
+  // Resolve incoming recipe titles once so the client doesn't need to fetch
+  // the full library (including inactive recipes) to label conflict rows.
+  const incomingRecipeIds = [...new Set(
+    materialized.filter((m) => m.recipe_id).map((m) => m.recipe_id)
+  )];
+  const incomingTitleMap = Object.create(null);
+  if (incomingRecipeIds.length) {
+    const placeholders = incomingRecipeIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT id, title FROM recipes WHERE id IN (${placeholders})`
+    ).all(...incomingRecipeIds);
+    for (const r of rows) incomingTitleMap[r.id] = r.title;
+  }
+
   const conflicts = [];
   for (const m of materialized) {
     const e = existingByKey.get(`${m.date}|${m.slot}|${m.eater}`);
-    if (e) conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming: m });
+    if (e) {
+      const incoming = {
+        ...m,
+        recipe_title: m.recipe_id ? incomingTitleMap[m.recipe_id] || null : null,
+      };
+      conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming });
+    }
   }
 
   if (conflicts.length && !onConflict) {
