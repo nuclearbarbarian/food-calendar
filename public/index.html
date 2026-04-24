@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,600&family=Uncial+Antiqua&family=UnifrakturMaguntia&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=5">
+  <link rel="stylesheet" href="/styles.css?v=6">
 </head>
 <body>
   <div class="app">
@@ -86,11 +86,12 @@
       </section>
 
       <section id="panel-shopping" class="panel" role="tabpanel" hidden>
-        <div class="empty-state">
-          <div class="empty-state-ornament" aria-hidden="true">✿ ❀ ✵ ❧ ✦</div>
-          <div class="empty-state-text">Shopping lists sprout from recipes.</div>
-          <div class="empty-state-sub">Phase 4 brings the generator.</div>
+        <div class="shopping-header">
+          <h2 class="shopping-title">Shopping lists</h2>
+          <button id="new-list-btn" class="btn-primary">+ New shopping list</button>
         </div>
+        <div id="shopping-lists" class="shopping-lists"></div>
+        <div id="shopping-detail" class="shopping-detail" hidden></div>
       </section>
     </main>
 
@@ -278,6 +279,50 @@
     </div>
   </div>
 
-  <script src="/app.js?v=5"></script>
+  <!-- Shopping list builder modal -->
+  <div id="list-builder-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="list-builder-title">
+      <header class="modal-header">
+        <h2 id="list-builder-title" class="modal-title">New shopping list</h2>
+        <button class="modal-close" data-close-modal aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <div class="form-row">
+          <label for="list-name">Name</label>
+          <input id="list-name" type="text" maxlength="200" placeholder="Shopping list — …">
+        </div>
+
+        <div class="form-row">
+          <div class="form-label-row">
+            <span class="form-label">Pick recipes</span>
+            <span id="picker-count" class="form-hint">0 selected</span>
+          </div>
+          <input id="picker-search" type="search" placeholder="Search recipes…" autocomplete="off">
+          <div id="recipe-picker-list" class="recipe-picker-list"></div>
+        </div>
+
+        <div class="form-row">
+          <button type="button" id="generate-list-btn" class="btn-ghost">Generate list from picks →</button>
+        </div>
+
+        <div class="form-row" id="preview-row" hidden>
+          <div class="form-label-row">
+            <span class="form-label">Preview — edit before saving</span>
+            <button type="button" id="add-preview-item" class="btn-ghost-sm">+ Add item</button>
+          </div>
+          <div id="preview-items" class="ingredient-rows"></div>
+        </div>
+
+        <div id="list-builder-errors" class="form-errors" hidden></div>
+      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-ghost" data-close-modal>Cancel</button>
+        <button type="button" id="list-save-btn" class="btn-primary footer-end">Save list</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/app.js?v=6"></script>
 </body>
 </html>

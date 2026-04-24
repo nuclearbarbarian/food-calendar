@@ -240,6 +240,154 @@ async function sendDigest({ date, meals, from, to, apiKey }) {
   return { resendId: data && data.id, subject, html, text };
 }
 
+// ── Shopping list email ───────────────────────────────────────────────────
+
+const UNIT_LABELS_INLINE = {
+  count: 'count',
+  pinch: 'pinch',
+  dash: 'dash',
+  tsp: 'tsp',
+  tbsp: 'tbsp',
+  cup: 'cup',
+  fl_oz: 'fl oz',
+  pint: 'pint',
+  quart: 'quart',
+  gallon: 'gallon',
+  ml: 'ml',
+  l: 'L',
+  oz: 'oz',
+  lb: 'lb',
+  g: 'g',
+  kg: 'kg',
+  to_taste: 'to taste',
+};
+
+function formatQuantityForEmail(q) {
+  if (q == null || q === 0) return '';
+  const rounded = Math.round(q * 1000) / 1000;
+  return String(rounded);
+}
+
+function formatShoppingItem(item) {
+  const qty = formatQuantityForEmail(item.quantity);
+  const unit = item.unit || null;
+  const unitLabel = unit ? UNIT_LABELS_INLINE[unit] || unit : '';
+  if (unit === 'to_taste' || unit === 'pinch' || unit === 'dash') {
+    const qualifier = qty ? `${qty} ${unitLabel}` : unitLabel;
+    return `${item.name} (${qualifier})`;
+  }
+  if (unit === 'count') {
+    return qty ? `${qty} ${item.name}` : item.name;
+  }
+  const prefix = [qty, unitLabel].filter(Boolean).join(' ');
+  return prefix ? `${prefix} ${item.name}` : item.name;
+}
+
+function buildShoppingListHtml({ list, items }) {
+  // Items already sorted alphabetically by the query, but enforce in case the
+  // caller pre-filtered or reordered.
+  const sorted = [...items].sort((a, b) => {
+    const an = a.name.toLowerCase();
+    const bn = b.name.toLowerCase();
+    if (an < bn) return -1;
+    if (an > bn) return 1;
+    return 0;
+  });
+
+  const rows = sorted.map((item) => {
+    const display = formatShoppingItem(item);
+    const style = item.checked
+      ? `color: ${COLORS.softBrown}; text-decoration: line-through;`
+      : `color: ${COLORS.cocoa};`;
+    const marker = item.checked ? '☒' : '☐';
+    return `
+      <tr><td style="padding: 6px 0; border-bottom: 1px dashed ${COLORS.latte}; font-size: 15px; ${style}">
+        <span style="font-family: 'Apple Symbols','Segoe UI Symbol',Georgia,serif; margin-right: 8px; color: ${COLORS.softBrown};">${marker}</span>
+        ${escapeHtml(display)}
+      </td></tr>
+    `;
+  }).join('');
+
+  const total = items.length;
+  const remaining = items.filter((i) => !i.checked).length;
+  const subtitle = total === 0
+    ? 'No items on this list.'
+    : total === remaining
+      ? `${total} item${total === 1 ? '' : 's'}`
+      : `${remaining} of ${total} remaining`;
+
+  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.parke}; letter-spacing: 8px;`;
+  const ornament = `<span style="${ornamentStyle}">✿ ❀ ✵ ❧ ✦</span>`;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(list.name)}</title>
+</head>
+<body style="margin:0;padding:0;background:${COLORS.cream};font-family:Georgia,'EB Garamond',serif;color:${COLORS.cocoa};line-height:1.5;-webkit-text-size-adjust:100%;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${COLORS.cream};">
+    <tr><td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+        <tr><td style="padding-bottom:16px;border-bottom:1px solid ${COLORS.latte};text-align:center;">
+          <div style="font-size:16px;">${ornament}</div>
+          <h1 style="font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:26px;margin:8px 0 4px 0;color:${COLORS.cocoa};">
+            ${escapeHtml(list.name)}
+          </h1>
+          <p style="margin:0;color:${COLORS.softBrown};font-size:14px;letter-spacing:0.5px;">
+            ${escapeHtml(subtitle)}
+          </p>
+        </td></tr>
+        <tr><td style="padding-top:12px;">
+          ${total === 0
+            ? `<p style="color:${COLORS.softBrown};font-style:italic;padding:24px 0;">No items yet.</p>`
+            : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>`}
+        </td></tr>
+        <tr><td style="padding-top:16px;border-top:1px solid ${COLORS.latte};color:${COLORS.softBrown};font-size:12px;text-align:center;">
+          <div style="font-size:14px;padding-bottom:6px;">${ornament}</div>
+          From the Food calendar
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildShoppingListText({ list, items }) {
+  const sorted = [...items].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  const lines = [list.name, ''];
+  if (items.length === 0) {
+    lines.push('No items.');
+  } else {
+    for (const item of sorted) {
+      const marker = item.checked ? '[x]' : '[ ]';
+      lines.push(`  ${marker} ${formatShoppingItem(item)}`);
+    }
+  }
+  lines.push('');
+  lines.push('From the Food calendar');
+  return lines.join('\n');
+}
+
+async function sendShoppingList({ list, items, from, to, apiKey }) {
+  if (!apiKey) throw new Error('RESEND_API_KEY is not set');
+  if (!from || !to) throw new Error('DIGEST_FROM / DIGEST_TO not set');
+
+  const html = buildShoppingListHtml({ list, items });
+  const text = buildShoppingListText({ list, items });
+  const total = items.length;
+  const subject = total === 0
+    ? `${list.name} — empty`
+    : `${list.name} — ${total} item${total === 1 ? '' : 's'}`;
+
+  const resend = new Resend(apiKey);
+  const { data, error } = await resend.emails.send({ from, to, subject, html, text });
+  if (error) throw new Error(typeof error === 'string' ? error : JSON.stringify(error));
+  return { resendId: data && data.id, subject, html, text };
+}
+
 module.exports = {
   buildDigestHtml,
   buildDigestText,
@@ -248,4 +396,8 @@ module.exports = {
   groupByEater,
   countMeals,
   buildSubject,
+  buildShoppingListHtml,
+  buildShoppingListText,
+  sendShoppingList,
+  formatShoppingItem,
 };

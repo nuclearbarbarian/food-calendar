@@ -20,6 +20,7 @@ const {
   buildSubject,
   countMeals,
   formatFriendlyDate,
+  sendShoppingList,
 } = require('./email');
 
 const DIGEST_TZ = process.env.DIGEST_TZ || 'America/Chicago';
@@ -174,6 +175,50 @@ const stmts = {
     INSERT OR REPLACE INTO digests_sent (date, sent_at, resend_id)
     VALUES (?, datetime('now'), ?)
   `),
+
+  // Shopping lists
+  listShoppingLists: db.prepare(`
+    SELECT
+      l.id, l.name, l.created_at, l.emailed_at,
+      (SELECT COUNT(*) FROM shopping_list_items WHERE list_id = l.id) AS item_count,
+      (SELECT COUNT(*) FROM shopping_list_items WHERE list_id = l.id AND checked = 1) AS checked_count
+    FROM shopping_lists l
+    ORDER BY l.created_at DESC
+  `),
+  getShoppingList: db.prepare(`
+    SELECT id, name, created_at, emailed_at FROM shopping_lists WHERE id = ?
+  `),
+  getShoppingListItems: db.prepare(`
+    SELECT id, list_id, name, quantity, unit, recipe_ids, checked, sort_order
+    FROM shopping_list_items
+    WHERE list_id = ?
+    ORDER BY name COLLATE NOCASE, unit
+  `),
+  insertShoppingList: db.prepare(`
+    INSERT INTO shopping_lists (name) VALUES (@name)
+  `),
+  renameShoppingList: db.prepare(`
+    UPDATE shopping_lists SET name = @name WHERE id = @id
+  `),
+  deleteShoppingList: db.prepare(`DELETE FROM shopping_lists WHERE id = ?`),
+  deleteShoppingListItems: db.prepare(`DELETE FROM shopping_list_items WHERE list_id = ?`),
+  insertShoppingListItem: db.prepare(`
+    INSERT INTO shopping_list_items (list_id, name, quantity, unit, recipe_ids, checked, sort_order)
+    VALUES (@list_id, @name, @quantity, @unit, @recipe_ids, @checked, @sort_order)
+  `),
+  setItemChecked: db.prepare(`
+    UPDATE shopping_list_items SET checked = ? WHERE id = ? AND list_id = ?
+  `),
+  removeCheckedItems: db.prepare(`
+    DELETE FROM shopping_list_items WHERE list_id = ? AND checked = 1
+  `),
+  recordShoppingListEmailed: db.prepare(`
+    UPDATE shopping_lists SET emailed_at = datetime('now') WHERE id = ?
+  `),
+
+  // Helpers for aggregation
+  getRecipeTitle: db.prepare(`SELECT title FROM recipes WHERE id = ?`),
+  getRecipeIngredientsByIds: null,  // constructed per query, see aggregateIngredientsFromRecipes
 };
 
 function toBool01(v) {
@@ -656,6 +701,276 @@ app.delete('/api/cooking-sessions/:id', (req, res) => {
   });
   run();
   res.status(204).end();
+});
+
+// ── Shopping lists ────────────────────────────────────────────────────────
+// Aggregate ingredients by (name trimmed+lowercased, unit). Exact-match on
+// name — "onion" and "yellow onion" stay separate by design because those
+// distinctions matter in cooking. Null-quantity items ("salt, to_taste")
+// carry through without summing.
+
+const MAX_LIST_NAME = 200;
+const MAX_ITEM_NAME = 200;
+const MAX_ITEMS_PER_LIST = 300;
+const MAX_RECIPES_PER_LIST = 50;
+
+function aggregateIngredientsFromRecipeIds(recipeIds) {
+  if (!recipeIds.length) return [];
+  const placeholders = recipeIds.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT recipe_id, name, quantity, unit
+     FROM recipe_ingredients
+     WHERE recipe_id IN (${placeholders})`
+  ).all(...recipeIds);
+
+  const map = new Map();
+  for (const row of rows) {
+    const trimmedName = row.name.trim();
+    const key = `${trimmedName.toLowerCase()}|${row.unit || ''}`;
+    if (map.has(key)) {
+      const ex = map.get(key);
+      // If both have quantities, sum them. If either is null, result is null
+      // (can't sum a number with "to taste" — leave it unquantified).
+      if (ex.quantity != null && row.quantity != null) {
+        ex.quantity += row.quantity;
+      } else {
+        ex.quantity = null;
+      }
+      if (!ex.recipe_ids.includes(row.recipe_id)) ex.recipe_ids.push(row.recipe_id);
+    } else {
+      map.set(key, {
+        name: trimmedName,
+        quantity: row.quantity,
+        unit: row.unit,
+        recipe_ids: [row.recipe_id],
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
+function validateShoppingItem(raw, i) {
+  const errors = [];
+  if (!raw || typeof raw !== 'object') {
+    errors.push(`item ${i}: must be an object`);
+    return { errors };
+  }
+  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, MAX_ITEM_NAME) : '';
+  if (!name) { errors.push(`item ${i}: name is required`); return { errors }; }
+
+  let quantity = null;
+  if (raw.quantity != null && raw.quantity !== '') {
+    if (typeof raw.quantity !== 'number' && typeof raw.quantity !== 'string') {
+      errors.push(`item ${i}: quantity must be a number or numeric string`);
+      return { errors };
+    }
+    const q = Number(raw.quantity);
+    if (!Number.isFinite(q) || q < 0 || q > 1_000_000) {
+      errors.push(`item ${i}: quantity out of range`);
+      return { errors };
+    }
+    quantity = q;
+  }
+  const unit = raw.unit == null || raw.unit === '' ? null : String(raw.unit);
+  if (!isUnit(unit)) { errors.push(`item ${i}: invalid unit "${unit}"`); return { errors }; }
+
+  const recipeIds = Array.isArray(raw.recipe_ids) ? raw.recipe_ids.filter((x) => Number.isInteger(x) && x > 0) : [];
+  const checked = raw.checked === 1 || raw.checked === true ? 1 : 0;
+
+  return { errors: [], clean: { name, quantity, unit, recipe_ids: recipeIds, checked } };
+}
+
+function hydrateShoppingListItem(row) {
+  let recipe_ids = [];
+  try { recipe_ids = JSON.parse(row.recipe_ids || '[]'); if (!Array.isArray(recipe_ids)) recipe_ids = []; }
+  catch (_) { recipe_ids = []; }
+  return {
+    ...row,
+    recipe_ids,
+    checked: row.checked === 1,
+  };
+}
+
+function defaultListName() {
+  const date = formatDate(new Date(), DIGEST_TZ);
+  const [y, m, d] = date.split('-').map(Number);
+  const friendly = new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+  return `Shopping list — ${friendly}`;
+}
+
+app.get('/api/shopping-lists', (req, res) => {
+  const rows = stmts.listShoppingLists.all();
+  res.json(rows);
+});
+
+app.get('/api/shopping-lists/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const list = stmts.getShoppingList.get(id);
+  if (!list) return res.status(404).json({ error: 'list not found' });
+  const items = stmts.getShoppingListItems.all(id).map(hydrateShoppingListItem);
+  res.json({ ...list, items });
+});
+
+app.post('/api/shopping-lists', (req, res) => {
+  const body = req.body || {};
+  const name = (typeof body.name === 'string' && body.name.trim())
+    ? body.name.trim().slice(0, MAX_LIST_NAME)
+    : defaultListName();
+
+  const recipeIds = Array.isArray(body.recipe_ids)
+    ? body.recipe_ids.filter((x) => Number.isInteger(x) && x > 0).slice(0, MAX_RECIPES_PER_LIST)
+    : [];
+
+  // If items provided, use them verbatim (after validation). Otherwise,
+  // aggregate from recipe_ids.
+  let cleanItems = [];
+  if (Array.isArray(body.items)) {
+    if (body.items.length > MAX_ITEMS_PER_LIST) {
+      return res.status(400).json({ errors: [`too many items (max ${MAX_ITEMS_PER_LIST})`] });
+    }
+    const allErrors = [];
+    body.items.forEach((raw, i) => {
+      const v = validateShoppingItem(raw, i);
+      if (v.errors.length) allErrors.push(...v.errors);
+      else cleanItems.push(v.clean);
+    });
+    if (allErrors.length) return res.status(400).json({ errors: allErrors });
+  } else {
+    cleanItems = aggregateIngredientsFromRecipeIds(recipeIds).map((item) => ({
+      ...item,
+      checked: 0,
+    }));
+  }
+
+  const create = db.transaction(() => {
+    const { lastInsertRowid } = stmts.insertShoppingList.run({ name });
+    cleanItems.forEach((item, i) => {
+      stmts.insertShoppingListItem.run({
+        list_id: lastInsertRowid,
+        name: item.name,
+        quantity: item.quantity,
+        unit: item.unit,
+        recipe_ids: JSON.stringify(item.recipe_ids || []),
+        checked: item.checked,
+        sort_order: i,
+      });
+    });
+    return lastInsertRowid;
+  });
+
+  const id = create();
+  const list = stmts.getShoppingList.get(id);
+  const items = stmts.getShoppingListItems.all(id).map(hydrateShoppingListItem);
+  res.status(201).json({ ...list, items });
+});
+
+app.patch('/api/shopping-lists/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const body = req.body || {};
+  if (typeof body.name !== 'string' || !body.name.trim()) {
+    return res.status(400).json({ error: 'name required' });
+  }
+  const result = stmts.renameShoppingList.run({
+    id,
+    name: body.name.trim().slice(0, MAX_LIST_NAME),
+  });
+  if (result.changes === 0) return res.status(404).json({ error: 'list not found' });
+  const list = stmts.getShoppingList.get(id);
+  res.json(list);
+});
+
+app.put('/api/shopping-lists/:id/items', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const list = stmts.getShoppingList.get(id);
+  if (!list) return res.status(404).json({ error: 'list not found' });
+
+  const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+  if (items.length > MAX_ITEMS_PER_LIST) {
+    return res.status(400).json({ errors: [`too many items (max ${MAX_ITEMS_PER_LIST})`] });
+  }
+
+  const allErrors = [];
+  const cleanItems = [];
+  items.forEach((raw, i) => {
+    const v = validateShoppingItem(raw, i);
+    if (v.errors.length) allErrors.push(...v.errors);
+    else cleanItems.push(v.clean);
+  });
+  if (allErrors.length) return res.status(400).json({ errors: allErrors });
+
+  const replace = db.transaction(() => {
+    stmts.deleteShoppingListItems.run(id);
+    cleanItems.forEach((item, i) => {
+      stmts.insertShoppingListItem.run({
+        list_id: id,
+        name: item.name,
+        quantity: item.quantity,
+        unit: item.unit,
+        recipe_ids: JSON.stringify(item.recipe_ids || []),
+        checked: item.checked,
+        sort_order: i,
+      });
+    });
+  });
+  replace();
+  const out = stmts.getShoppingListItems.all(id).map(hydrateShoppingListItem);
+  res.json({ id, items: out });
+});
+
+app.patch('/api/shopping-lists/:id/items/:itemId', (req, res) => {
+  const listId = parseRecipeId(req.params.id);
+  const itemId = parseRecipeId(req.params.itemId);
+  if (listId == null || itemId == null) return res.status(400).json({ error: 'invalid id' });
+  const checked = toBool01(req.body && req.body.checked);
+  const result = stmts.setItemChecked.run(checked, itemId, listId);
+  if (result.changes === 0) return res.status(404).json({ error: 'item not found' });
+  res.json({ id: itemId, list_id: listId, checked: checked === 1 });
+});
+
+app.post('/api/shopping-lists/:id/remove-checked', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const list = stmts.getShoppingList.get(id);
+  if (!list) return res.status(404).json({ error: 'list not found' });
+  const result = stmts.removeCheckedItems.run(id);
+  res.json({ id, removed: result.changes });
+});
+
+app.delete('/api/shopping-lists/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const result = stmts.deleteShoppingList.run(id);
+  if (result.changes === 0) return res.status(404).json({ error: 'list not found' });
+  res.status(204).end();
+});
+
+app.post('/api/shopping-lists/:id/email', async (req, res, next) => {
+  try {
+    const id = parseRecipeId(req.params.id);
+    if (id == null) return res.status(400).json({ error: 'invalid id' });
+    const list = stmts.getShoppingList.get(id);
+    if (!list) return res.status(404).json({ error: 'list not found' });
+    const items = stmts.getShoppingListItems.all(id).map(hydrateShoppingListItem);
+
+    const { RESEND_API_KEY, DIGEST_FROM, DIGEST_TO } = process.env;
+    const result = await sendShoppingList({
+      list,
+      items,
+      from: DIGEST_FROM,
+      to: DIGEST_TO,
+      apiKey: RESEND_API_KEY,
+    });
+    stmts.recordShoppingListEmailed.run(id);
+    const updated = stmts.getShoppingList.get(id);
+    res.json({ ok: true, resend_id: result.resendId, list: updated });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ── Morning digest ────────────────────────────────────────────────────────

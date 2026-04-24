@@ -1338,6 +1338,494 @@
     box.hidden = false;
   }
 
+  // ── Shopping lists ───────────────────────────────────────────────────────
+
+  const shop = {
+    lists: [],           // list summaries
+    activeListId: null,  // currently-open list detail
+    builder: {           // modal state
+      recipes: [],       // all active recipes for the picker
+      selected: new Set(),
+      search: '',
+      preview: [],       // items to save — editable before save
+    },
+  };
+
+  async function loadShoppingLists() {
+    shop.lists = await api('GET', '/api/shopping-lists');
+  }
+
+  function renderShoppingPanel() {
+    const listsWrap = $('shopping-lists');
+    const detailWrap = $('shopping-detail');
+
+    if (shop.activeListId != null) {
+      listsWrap.hidden = true;
+      detailWrap.hidden = false;
+      return;
+    }
+    listsWrap.hidden = false;
+    detailWrap.hidden = true;
+
+    listsWrap.innerHTML = '';
+    if (shop.lists.length === 0) {
+      listsWrap.appendChild(
+        el(
+          'div',
+          { class: 'empty-state' },
+          el('div', { class: 'empty-state-ornament', 'aria-hidden': 'true' }, '✿ ❀ ✵ ❧ ✦'),
+          el('div', { class: 'empty-state-text' }, 'No shopping lists yet.'),
+          el('div', { class: 'empty-state-sub' }, 'Click "+ New shopping list" to pick recipes and generate one.')
+        )
+      );
+      return;
+    }
+    for (const list of shop.lists) {
+      listsWrap.appendChild(renderListCard(list));
+    }
+  }
+
+  function renderListCard(list) {
+    const itemLabel = list.item_count === 1 ? '1 item' : `${list.item_count} items`;
+    const checkedLabel = list.checked_count > 0 ? ` · ${list.checked_count} checked` : '';
+    const card = el(
+      'article',
+      { class: 'list-card', onclick: () => openListDetail(list.id) },
+      el('h3', { class: 'list-card-name' }, list.name),
+      el(
+        'div',
+        { class: 'list-card-meta' },
+        el('span', {}, itemLabel + checkedLabel),
+        list.emailed_at ? el('span', { class: 'list-emailed-badge' }, 'emailed') : null
+      )
+    );
+    return card;
+  }
+
+  async function openListDetail(id) {
+    shop.activeListId = id;
+    const list = await api('GET', `/api/shopping-lists/${id}`);
+    renderListDetail(list);
+  }
+
+  function closeListDetail() {
+    shop.activeListId = null;
+    renderShoppingPanel();
+  }
+
+  function renderListDetail(list) {
+    renderShoppingPanel();
+    const wrap = $('shopping-detail');
+    wrap.innerHTML = '';
+
+    const nameInput = el('input', {
+      type: 'text',
+      class: 'detail-name-input',
+      value: list.name,
+      maxlength: 200,
+    });
+    nameInput.addEventListener('change', async () => {
+      const name = nameInput.value.trim();
+      if (!name || name === list.name) { nameInput.value = list.name; return; }
+      try {
+        await api('PATCH', `/api/shopping-lists/${list.id}`, { name });
+        list.name = name;
+      } catch (err) { alert('Rename failed.'); nameInput.value = list.name; }
+    });
+
+    const actions = el(
+      'div',
+      { class: 'detail-actions' },
+      el(
+        'button',
+        { class: 'btn-ghost', onclick: () => handleEmailList(list.id) },
+        '📧 Email me this list'
+      ),
+      el(
+        'button',
+        {
+          class: 'btn-ghost',
+          onclick: () => handleRemoveChecked(list.id),
+        },
+        'Remove checked'
+      ),
+      el(
+        'button',
+        { class: 'btn-ghost btn-danger', onclick: () => handleDeleteList(list.id) },
+        'Delete'
+      ),
+      el(
+        'button',
+        { class: 'btn-ghost', onclick: closeListDetail },
+        '← Back'
+      )
+    );
+
+    wrap.appendChild(el('header', { class: 'detail-header' }, nameInput, actions));
+
+    const metaBits = [];
+    const total = list.items.length;
+    const remaining = list.items.filter((i) => !i.checked).length;
+    if (total === 0) metaBits.push('No items');
+    else if (total === remaining) metaBits.push(`${total} item${total === 1 ? '' : 's'}`);
+    else metaBits.push(`${remaining} of ${total} remaining`);
+    if (list.emailed_at) metaBits.push(`Last emailed ${list.emailed_at} UTC`);
+    wrap.appendChild(el('div', { class: 'detail-meta-row' }, metaBits.join(' · ')));
+
+    const itemList = el('div', { class: 'item-list' });
+    for (const item of list.items) itemList.appendChild(renderItemRow(list.id, item));
+    wrap.appendChild(itemList);
+
+    wrap.appendChild(
+      el(
+        'button',
+        { class: 'btn-ghost-sm', onclick: () => addItemToList(list) },
+        '+ Add item'
+      )
+    );
+  }
+
+  function renderItemRow(listId, item) {
+    const row = el('div', {
+      class: `item-row${item.checked ? ' checked' : ''}`,
+      dataset: { itemId: String(item.id) },
+    });
+    const checkBtn = el(
+      'button',
+      {
+        class: `item-checkbox${item.checked ? ' checked' : ''}`,
+        'aria-label': item.checked ? 'Uncheck' : 'Check',
+        onclick: async () => {
+          try {
+            await api('PATCH', `/api/shopping-lists/${listId}/items/${item.id}`, { checked: item.checked ? 0 : 1 });
+            await openListDetail(listId);
+          } catch (err) { alert('Could not toggle.'); }
+        },
+      },
+      item.checked ? '✓' : ''
+    );
+    const qtyInput = el('input', {
+      type: 'text',
+      class: 'item-qty',
+      placeholder: 'Qty',
+      value: item.quantity != null ? formatQuantity(item.quantity) : '',
+    });
+    const unitSelect = buildUnitSelect(item.unit);
+    unitSelect.classList.add('item-unit');
+    const nameInput = el('input', {
+      type: 'text',
+      class: 'item-name',
+      value: item.name,
+      maxlength: 200,
+    });
+    const removeBtn = el(
+      'button',
+      {
+        class: 'ingredient-remove',
+        'aria-label': 'Remove',
+        onclick: () => { row.remove(); persistItems(listId); },
+      },
+      '✕'
+    );
+    // Debounced persistence on change
+    for (const input of [qtyInput, unitSelect, nameInput]) {
+      input.addEventListener('change', () => persistItems(listId));
+    }
+
+    row.appendChild(checkBtn);
+    row.appendChild(qtyInput);
+    row.appendChild(unitSelect);
+    row.appendChild(nameInput);
+    row.appendChild(removeBtn);
+    return row;
+  }
+
+  function readItemRowsFromDetail() {
+    const rows = $$('.item-row', $('shopping-detail'));
+    const items = [];
+    for (const row of rows) {
+      const name = row.querySelector('.item-name').value.trim();
+      if (!name) continue;
+      const qtyRaw = row.querySelector('.item-qty').value.trim();
+      const unit = row.querySelector('.item-unit').value || null;
+      const parsed = parseQuantity(qtyRaw);
+      if (!parsed.ok) continue;
+      items.push({
+        name,
+        quantity: parsed.value,
+        unit,
+        checked: row.classList.contains('checked') ? 1 : 0,
+      });
+    }
+    return items;
+  }
+
+  async function persistItems(listId) {
+    try {
+      const items = readItemRowsFromDetail();
+      await api('PUT', `/api/shopping-lists/${listId}/items`, { items });
+    } catch (err) {
+      console.error('Persist failed', err);
+    }
+  }
+
+  function addItemToList(list) {
+    list.items.push({ id: null, name: '', quantity: null, unit: null, checked: false, recipe_ids: [] });
+    renderListDetail(list);
+  }
+
+  async function handleEmailList(id) {
+    if (!confirm("Email this list to Parke's inbox?")) return;
+    try {
+      const result = await api('POST', `/api/shopping-lists/${id}/email`);
+      alert(`Sent. Subject line based on list name.\nResend id: ${result.resend_id || 'n/a'}`);
+      await openListDetail(id);
+    } catch (err) {
+      alert('Email failed: ' + (err.data && err.data.error ? err.data.error : 'unknown'));
+    }
+  }
+
+  async function handleRemoveChecked(id) {
+    if (!confirm('Remove all checked items from this list?')) return;
+    try {
+      const result = await api('POST', `/api/shopping-lists/${id}/remove-checked`);
+      if (result.removed === 0) {
+        alert('No checked items to remove.');
+        return;
+      }
+      await openListDetail(id);
+    } catch (err) { alert('Remove failed.'); }
+  }
+
+  async function handleDeleteList(id) {
+    if (!confirm('Delete this shopping list? This cannot be undone.')) return;
+    try {
+      await api('DELETE', `/api/shopping-lists/${id}`);
+      closeListDetail();
+      await loadShoppingLists();
+      renderShoppingPanel();
+    } catch (err) { alert('Delete failed.'); }
+  }
+
+  // ── List builder modal ───────────────────────────────────────────────────
+
+  async function openListBuilder() {
+    shop.builder.selected = new Set();
+    shop.builder.search = '';
+    shop.builder.preview = [];
+    $('list-name').value = '';
+    $('picker-search').value = '';
+    $('picker-count').textContent = '0 selected';
+    $('preview-row').hidden = true;
+    $('preview-items').innerHTML = '';
+    $('list-builder-errors').hidden = true;
+    $('list-builder-errors').textContent = '';
+
+    // Always load a fresh copy of active recipes.
+    shop.builder.recipes = await api('GET', '/api/recipes');
+    renderRecipePicker();
+    showModal('list-builder-modal');
+    $('list-name').focus();
+  }
+
+  function renderRecipePicker() {
+    const list = $('recipe-picker-list');
+    list.innerHTML = '';
+    const q = shop.builder.search.toLowerCase();
+    const filtered = shop.builder.recipes.filter((r) => !q || r.title.toLowerCase().includes(q));
+    filtered.sort((a, b) => a.title.localeCompare(b.title));
+    for (const r of filtered) {
+      const checked = shop.builder.selected.has(r.id);
+      const row = el(
+        'label',
+        { class: `picker-row${checked ? ' selected' : ''}` },
+        el('input', {
+          type: 'checkbox',
+          onchange: (e) => {
+            if (e.target.checked) shop.builder.selected.add(r.id);
+            else shop.builder.selected.delete(r.id);
+            row.classList.toggle('selected', e.target.checked);
+            updatePickerCount();
+          },
+        }),
+        el('span', { class: 'picker-title' }, r.title),
+        el('span', { class: 'picker-slots' }, r.slot_categories.join(' · '))
+      );
+      row.querySelector('input').checked = checked;
+      list.appendChild(row);
+    }
+    updatePickerCount();
+  }
+
+  function updatePickerCount() {
+    const n = shop.builder.selected.size;
+    $('picker-count').textContent = `${n} selected`;
+  }
+
+  function initListBuilder() {
+    $('new-list-btn').addEventListener('click', () => openListBuilder());
+    $('picker-search').addEventListener('input', (e) => {
+      shop.builder.search = e.target.value.trim();
+      renderRecipePicker();
+    });
+    $('generate-list-btn').addEventListener('click', handleGenerateFromPicks);
+    $('add-preview-item').addEventListener('click', () => addPreviewRow());
+    $('list-save-btn').addEventListener('click', handleSaveList);
+  }
+
+  async function handleGenerateFromPicks() {
+    if (shop.builder.selected.size === 0) {
+      return showListBuilderError(['Pick at least one recipe first.']);
+    }
+    // Build a preview by creating a temp list via POST, then show items —
+    // but we don't want to save yet. Simpler: let the server aggregate
+    // without persisting. We'll replicate the aggregation client-side
+    // by fetching each recipe detail and summing.
+    try {
+      const recipeIds = Array.from(shop.builder.selected);
+      const recipes = await Promise.all(recipeIds.map((id) => api('GET', `/api/recipes/${id}`)));
+      shop.builder.preview = aggregateClientSide(recipes);
+      renderPreview();
+      $('preview-row').hidden = false;
+    } catch (err) {
+      showListBuilderError(['Could not load recipes.']);
+    }
+  }
+
+  function aggregateClientSide(recipes) {
+    const map = new Map();
+    for (const r of recipes) {
+      for (const ing of (r.ingredients || [])) {
+        const trimmedName = (ing.name || '').trim();
+        if (!trimmedName) continue;
+        const key = `${trimmedName.toLowerCase()}|${ing.unit || ''}`;
+        if (map.has(key)) {
+          const ex = map.get(key);
+          if (ex.quantity != null && ing.quantity != null) ex.quantity += ing.quantity;
+          else ex.quantity = null;
+          if (!ex.recipe_ids.includes(r.id)) ex.recipe_ids.push(r.id);
+        } else {
+          map.set(key, {
+            name: trimmedName,
+            quantity: ing.quantity,
+            unit: ing.unit,
+            recipe_ids: [r.id],
+          });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  }
+
+  function renderPreview() {
+    const wrap = $('preview-items');
+    wrap.innerHTML = '';
+    if (shop.builder.preview.length === 0) {
+      wrap.appendChild(el('div', { class: 'detail-empty' }, 'No ingredients in selected recipes.'));
+      return;
+    }
+    for (const item of shop.builder.preview) wrap.appendChild(buildPreviewRow(item));
+  }
+
+  function buildPreviewRow(item) {
+    const row = el('div', { class: 'ingredient-row' });
+    row.appendChild(
+      el('input', {
+        type: 'text',
+        class: 'ingredient-qty',
+        placeholder: 'Qty',
+        value: item.quantity != null ? formatQuantity(item.quantity) : '',
+      })
+    );
+    const sel = buildUnitSelect(item.unit);
+    sel.classList.add('ingredient-unit');
+    row.appendChild(sel);
+    row.appendChild(
+      el('input', {
+        type: 'text',
+        class: 'ingredient-name',
+        placeholder: 'Ingredient',
+        value: item.name,
+      })
+    );
+    row.appendChild(
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'ingredient-remove',
+          'aria-label': 'Remove',
+          onclick: () => row.remove(),
+        },
+        '✕'
+      )
+    );
+    return row;
+  }
+
+  function addPreviewRow() {
+    $('preview-items').appendChild(buildPreviewRow({ name: '', quantity: null, unit: null }));
+    $('preview-row').hidden = false;
+  }
+
+  function readPreviewItems() {
+    const rows = $$('.ingredient-row', $('preview-items'));
+    const errors = [];
+    const items = [];
+    rows.forEach((row, i) => {
+      const name = row.querySelector('.ingredient-name').value.trim();
+      const qtyRaw = row.querySelector('.ingredient-qty').value.trim();
+      const unit = row.querySelector('.ingredient-unit').value || null;
+      if (!name && !qtyRaw && !unit) return;
+      if (!name) { errors.push(`Preview row ${i + 1}: name required`); return; }
+      const parsed = parseQuantity(qtyRaw);
+      if (!parsed.ok) { errors.push(`Preview row ${i + 1}: bad quantity`); return; }
+      items.push({ name, quantity: parsed.value, unit, checked: 0 });
+    });
+    return { items, errors };
+  }
+
+  async function handleSaveList() {
+    const btn = $('list-save-btn');
+    if (btn.disabled) return;
+    const name = $('list-name').value.trim();
+    const recipeIds = Array.from(shop.builder.selected);
+
+    let items = [];
+    if (!$('preview-row').hidden) {
+      const { items: parsedItems, errors } = readPreviewItems();
+      if (errors.length) return showListBuilderError(errors);
+      items = parsedItems;
+    }
+
+    if (!recipeIds.length && !items.length) {
+      return showListBuilderError(['Pick at least one recipe, or add items to the preview.']);
+    }
+
+    const body = { name: name || undefined, recipe_ids: recipeIds };
+    if (items.length) body.items = items;
+
+    btn.disabled = true;
+    try {
+      const saved = await api('POST', '/api/shopping-lists', body);
+      hideModal('list-builder-modal');
+      await loadShoppingLists();
+      shop.activeListId = saved.id;
+      await openListDetail(saved.id);
+    } catch (err) {
+      showListBuilderError(extractErrorMessages(err));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function showListBuilderError(msgs) {
+    const box = $('list-builder-errors');
+    box.innerHTML = '';
+    for (const m of msgs) box.appendChild(el('div', {}, m));
+    box.hidden = false;
+  }
+
   // ── Modal controller ─────────────────────────────────────────────────────
 
   function showModal(id) {
@@ -1378,15 +1866,23 @@
     initEditModal();
     initDetailModal();
     initCalendar();
+    initListBuilder();
     initModalDismiss();
     renderLibrary();
-    // Render calendar lazily on first visit.
+    // Lazy render on first visit so we don't network on boot.
     let calendarRendered = false;
-    const calTab = document.querySelector('.tab[data-panel="calendar"]');
-    calTab.addEventListener('click', () => {
+    document.querySelector('.tab[data-panel="calendar"]').addEventListener('click', () => {
       if (!calendarRendered) {
         calendarRendered = true;
         renderCalendar().catch((err) => console.error('Calendar render failed:', err));
+      }
+    });
+    let shoppingRendered = false;
+    document.querySelector('.tab[data-panel="shopping"]').addEventListener('click', async () => {
+      if (!shoppingRendered) {
+        shoppingRendered = true;
+        try { await loadShoppingLists(); renderShoppingPanel(); }
+        catch (err) { console.error('Shopping load failed:', err); }
       }
     });
   }
