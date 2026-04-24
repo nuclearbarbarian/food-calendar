@@ -74,7 +74,7 @@
   }
 
   function formatQuantity(q) {
-    if (q == null || q === 0) return '';
+    if (q == null) return '';
     const rounded = Math.round(q * 1000) / 1000;
     return String(rounded);
   }
@@ -1488,7 +1488,11 @@
   function renderItemRow(listId, item) {
     const row = el('div', {
       class: `item-row${item.checked ? ' checked' : ''}`,
-      dataset: { itemId: String(item.id) },
+      dataset: {
+        itemId: String(item.id || ''),
+        checked: item.checked ? '1' : '0',
+        recipeIds: JSON.stringify(item.recipe_ids || []),
+      },
     });
     const checkBtn = el(
       'button',
@@ -1496,10 +1500,24 @@
         class: `item-checkbox${item.checked ? ' checked' : ''}`,
         'aria-label': item.checked ? 'Uncheck' : 'Check',
         onclick: async () => {
+          // Update the DOM synchronously so any in-flight persistItems read
+          // reflects the new state immediately.
+          const isChecked = row.dataset.checked === '1';
+          const nextChecked = !isChecked;
+          row.dataset.checked = nextChecked ? '1' : '0';
+          row.classList.toggle('checked', nextChecked);
+          checkBtn.classList.toggle('checked', nextChecked);
+          checkBtn.textContent = nextChecked ? '✓' : '';
           try {
-            await api('PATCH', `/api/shopping-lists/${listId}/items/${item.id}`, { checked: item.checked ? 0 : 1 });
-            await openListDetail(listId);
-          } catch (err) { alert('Could not toggle.'); }
+            await api('PATCH', `/api/shopping-lists/${listId}/items/${item.id}`, { checked: nextChecked ? 1 : 0 });
+          } catch (err) {
+            // Revert on failure.
+            row.dataset.checked = isChecked ? '1' : '0';
+            row.classList.toggle('checked', isChecked);
+            checkBtn.classList.toggle('checked', isChecked);
+            checkBtn.textContent = isChecked ? '✓' : '';
+            alert('Could not toggle.');
+          }
         },
       },
       item.checked ? '✓' : ''
@@ -1543,30 +1561,52 @@
   function readItemRowsFromDetail() {
     const rows = $$('.item-row', $('shopping-detail'));
     const items = [];
-    for (const row of rows) {
+    const errors = [];
+    rows.forEach((row, i) => {
+      row.classList.remove('row-error');
       const name = row.querySelector('.item-name').value.trim();
-      if (!name) continue;
+      if (!name) return; // silently skip fully-empty rows
       const qtyRaw = row.querySelector('.item-qty').value.trim();
       const unit = row.querySelector('.item-unit').value || null;
       const parsed = parseQuantity(qtyRaw);
-      if (!parsed.ok) continue;
+      if (!parsed.ok) {
+        errors.push(`Row ${i + 1}: "${qtyRaw}" isn't a number or fraction`);
+        row.classList.add('row-error');
+        return;
+      }
+      let recipeIds = [];
+      try { recipeIds = JSON.parse(row.dataset.recipeIds || '[]'); } catch (_) {}
       items.push({
         name,
         quantity: parsed.value,
         unit,
-        checked: row.classList.contains('checked') ? 1 : 0,
+        checked: row.dataset.checked === '1' ? 1 : 0,
+        recipe_ids: recipeIds,
       });
-    }
-    return items;
+    });
+    return { items, errors };
   }
 
-  async function persistItems(listId) {
-    try {
-      const items = readItemRowsFromDetail();
-      await api('PUT', `/api/shopping-lists/${listId}/items`, { items });
-    } catch (err) {
-      console.error('Persist failed', err);
-    }
+  // Debounce the heavy PUT-replaces-everything save so rapid typing doesn't
+  // fire one delete+reinsert per keystroke. In-store toggles still land
+  // immediately via their own PATCH endpoint.
+  let persistTimer = null;
+  function persistItems(listId) {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(async () => {
+      persistTimer = null;
+      const { items, errors } = readItemRowsFromDetail();
+      if (errors.length) {
+        // Leave the bad row marked; don't persist until resolved.
+        console.warn('Persist skipped due to row errors:', errors);
+        return;
+      }
+      try {
+        await api('PUT', `/api/shopping-lists/${listId}/items`, { items });
+      } catch (err) {
+        console.error('Persist failed', err);
+      }
+    }, 500);
   }
 
   function addItemToList(list) {
@@ -1574,14 +1614,19 @@
     renderListDetail(list);
   }
 
+  let emailSendInFlight = false;
   async function handleEmailList(id) {
+    if (emailSendInFlight) return;
     if (!confirm("Email this list to Parke's inbox?")) return;
+    emailSendInFlight = true;
     try {
       const result = await api('POST', `/api/shopping-lists/${id}/email`);
-      alert(`Sent. Subject line based on list name.\nResend id: ${result.resend_id || 'n/a'}`);
+      alert(`Sent. Resend id: ${result.resend_id || 'n/a'}`);
       await openListDetail(id);
     } catch (err) {
       alert('Email failed: ' + (err.data && err.data.error ? err.data.error : 'unknown'));
+    } finally {
+      emailSendInFlight = false;
     }
   }
 
@@ -1803,6 +1848,9 @@
     }
 
     const body = { name: name || undefined, recipe_ids: recipeIds };
+    // Only pass `items` when the user actually edited the preview to a non-empty
+    // set. If they cleared all preview rows, fall through to server aggregation
+    // from recipe_ids so we don't save an empty list unexpectedly.
     if (items.length) body.items = items;
 
     btn.disabled = true;

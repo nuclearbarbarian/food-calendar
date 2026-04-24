@@ -1625,6 +1625,17 @@ body.modal-open {
   opacity: 0.6;
 }
 
+.item-row.row-error {
+  background: var(--color-error-tint);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  margin: var(--space-xxs) 0;
+}
+
+.item-row.row-error .item-qty {
+  border-color: var(--color-error);
+}
+
 .detail-meta-row {
   color: var(--color-soft-brown);
   font-size: var(--text-small);
