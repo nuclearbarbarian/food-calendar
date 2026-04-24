@@ -39,7 +39,7 @@ Three fixed: `breakfast`, `lunch`, `dinner`.
 - [x] Phase 2 — Calendar + meal planning (+ cooking session model)
 - [x] Phase 3 — Morning email digest
 - [x] Phase 4 — Shopping list generator
-- [ ] Phase 5 — Bi-weekly menu scheduler
+- [x] Phase 5 — Bi-weekly menu scheduler
 - [ ] Phase 6 — Photo→recipe Claude Code skill
 - [ ] Phase 7 — Polish + deploy
 

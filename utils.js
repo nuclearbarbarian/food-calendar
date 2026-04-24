@@ -57,6 +57,18 @@ function isUnit(value) {
   return value === null || value === undefined || UNITS.includes(value);
 }
 
+// Add N days to an ISO YYYY-MM-DD string. Returns a new ISO string.
+// Uses UTC arithmetic on day-only strings — no time-of-day component.
+function addDaysToIso(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + n);
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 // Returns YYYY-MM-DD in the given IANA timezone. Never use toISOString().slice(0,10).
 function formatDate(date, tz) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -90,5 +102,6 @@ module.exports = {
   isSlot,
   isUnit,
   formatDate,
+  addDaysToIso,
   escapeHtml,
 };

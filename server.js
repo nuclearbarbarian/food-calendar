@@ -12,6 +12,7 @@ const {
   isSlot,
   isUnit,
   formatDate,
+  addDaysToIso,
 } = require('./utils');
 const {
   buildDigestHtml,
@@ -219,6 +220,43 @@ const stmts = {
   // Helpers for aggregation
   getRecipeTitle: db.prepare(`SELECT title FROM recipes WHERE id = ?`),
   getRecipeIngredientsByIds: null,  // constructed per query, see aggregateIngredientsFromRecipes
+
+  // Menus
+  listMenus: db.prepare(`
+    SELECT
+      m.id, m.name, m.active, m.created_at,
+      (SELECT COUNT(*) FROM menu_slots
+        WHERE menu_id = m.id
+          AND (recipe_id IS NOT NULL OR free_text IS NOT NULL)
+      ) AS filled_slot_count
+    FROM menus m
+    ORDER BY m.active DESC, m.created_at DESC
+  `),
+  getMenu: db.prepare(`
+    SELECT id, name, active, created_at FROM menus WHERE id = ?
+  `),
+  getMenuSlots: db.prepare(`
+    SELECT id, menu_id, day_of_cycle, slot, eater, recipe_id, free_text
+    FROM menu_slots
+    WHERE menu_id = ?
+    ORDER BY day_of_cycle, slot, eater
+  `),
+  getFilledMenuSlots: db.prepare(`
+    SELECT day_of_cycle, slot, eater, recipe_id, free_text
+    FROM menu_slots
+    WHERE menu_id = ?
+      AND (recipe_id IS NOT NULL OR free_text IS NOT NULL)
+    ORDER BY day_of_cycle, slot, eater
+  `),
+  insertMenu: db.prepare(`INSERT INTO menus (name) VALUES (@name)`),
+  renameMenu: db.prepare(`UPDATE menus SET name = @name WHERE id = @id`),
+  setMenuActive: db.prepare(`UPDATE menus SET active = ? WHERE id = ?`),
+  deleteMenu: db.prepare(`DELETE FROM menus WHERE id = ?`),
+  deleteMenuSlots: db.prepare(`DELETE FROM menu_slots WHERE menu_id = ?`),
+  insertMenuSlot: db.prepare(`
+    INSERT INTO menu_slots (menu_id, day_of_cycle, slot, eater, recipe_id, free_text)
+    VALUES (@menu_id, @day_of_cycle, @slot, @eater, @recipe_id, @free_text)
+  `),
 };
 
 function toBool01(v) {
@@ -701,6 +739,231 @@ app.delete('/api/cooking-sessions/:id', (req, res) => {
   });
   run();
   res.status(204).end();
+});
+
+// ── Menus (bi-weekly templates) ───────────────────────────────────────────
+// A menu is a named 14-day (day_of_cycle 0–13) grid of slot/eater cells.
+// Empty cells are allowed — they don't materialize on apply.
+
+const MAX_MENU_NAME = 200;
+const MAX_MENU_SLOTS = 14 * 3 * 3;
+
+function validateMenuSlot(raw, i) {
+  const errors = [];
+  if (!raw || typeof raw !== 'object') {
+    errors.push(`slot ${i}: must be an object`);
+    return { errors };
+  }
+  const day = Number(raw.day_of_cycle);
+  if (!Number.isInteger(day) || day < 0 || day > 13) {
+    errors.push(`slot ${i}: day_of_cycle must be 0–13`);
+    return { errors };
+  }
+  if (!SLOTS_SET.has(raw.slot)) {
+    errors.push(`slot ${i}: invalid slot "${raw.slot}"`);
+    return { errors };
+  }
+  if (!EATERS_SET.has(raw.eater)) {
+    errors.push(`slot ${i}: invalid eater "${raw.eater}"`);
+    return { errors };
+  }
+  const hasRecipe = raw.recipe_id != null && raw.recipe_id !== '';
+  const hasFreeText = typeof raw.free_text === 'string' && raw.free_text.trim().length > 0;
+  if (hasRecipe && hasFreeText) {
+    errors.push(`slot ${i}: set at most one of recipe_id or free_text`);
+    return { errors };
+  }
+  let recipe_id = null;
+  let free_text = null;
+  if (hasRecipe) {
+    const rid = Number(raw.recipe_id);
+    if (!Number.isInteger(rid) || rid <= 0) {
+      errors.push(`slot ${i}: invalid recipe_id`);
+      return { errors };
+    }
+    recipe_id = rid;
+  } else if (hasFreeText) {
+    free_text = raw.free_text.trim().slice(0, 200);
+  }
+  return {
+    errors: [],
+    clean: {
+      day_of_cycle: day,
+      slot: raw.slot,
+      eater: raw.eater,
+      recipe_id,
+      free_text,
+    },
+  };
+}
+
+function hydrateMenu(row) {
+  return { ...row, active: row.active === 1 };
+}
+
+app.get('/api/menus', (req, res) => {
+  const rows = stmts.listMenus.all().map(hydrateMenu);
+  res.json(rows);
+});
+
+app.get('/api/menus/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const menu = stmts.getMenu.get(id);
+  if (!menu) return res.status(404).json({ error: 'menu not found' });
+  const slots = stmts.getMenuSlots.all(id);
+  res.json({ ...hydrateMenu(menu), slots });
+});
+
+app.post('/api/menus', (req, res) => {
+  const body = req.body || {};
+  const name = typeof body.name === 'string' && body.name.trim()
+    ? body.name.trim().slice(0, MAX_MENU_NAME)
+    : 'Untitled menu';
+  const result = stmts.insertMenu.run({ name });
+  const menu = stmts.getMenu.get(result.lastInsertRowid);
+  res.status(201).json({ ...hydrateMenu(menu), slots: [] });
+});
+
+app.patch('/api/menus/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const existing = stmts.getMenu.get(id);
+  if (!existing) return res.status(404).json({ error: 'menu not found' });
+  const body = req.body || {};
+  if (typeof body.name === 'string' && body.name.trim()) {
+    stmts.renameMenu.run({ id, name: body.name.trim().slice(0, MAX_MENU_NAME) });
+  }
+  if (body.active !== undefined) {
+    stmts.setMenuActive.run(toBool01(body.active), id);
+  }
+  res.json(hydrateMenu(stmts.getMenu.get(id)));
+});
+
+app.put('/api/menus/:id/slots', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const existing = stmts.getMenu.get(id);
+  if (!existing) return res.status(404).json({ error: 'menu not found' });
+
+  const rawSlots = Array.isArray(req.body && req.body.slots) ? req.body.slots : [];
+  if (rawSlots.length > MAX_MENU_SLOTS) {
+    return res.status(400).json({ errors: [`too many slots (max ${MAX_MENU_SLOTS})`] });
+  }
+  const allErrors = [];
+  const clean = [];
+  rawSlots.forEach((raw, i) => {
+    const v = validateMenuSlot(raw, i);
+    if (v.errors.length) allErrors.push(...v.errors);
+    else if (v.clean.recipe_id != null || v.clean.free_text != null) {
+      // Only persist non-empty slots — empty is represented by absence.
+      clean.push(v.clean);
+    }
+  });
+  if (allErrors.length) return res.status(400).json({ errors: allErrors });
+
+  const replace = db.transaction(() => {
+    stmts.deleteMenuSlots.run(id);
+    for (const s of clean) {
+      stmts.insertMenuSlot.run({
+        menu_id: id,
+        day_of_cycle: s.day_of_cycle,
+        slot: s.slot,
+        eater: s.eater,
+        recipe_id: s.recipe_id,
+        free_text: s.free_text,
+      });
+    }
+  });
+  replace();
+  const slots = stmts.getMenuSlots.all(id);
+  res.json({ id, slots });
+});
+
+app.delete('/api/menus/:id', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const result = stmts.deleteMenu.run(id);
+  if (result.changes === 0) return res.status(404).json({ error: 'menu not found' });
+  res.status(204).end();
+});
+
+app.post('/api/menus/:id/apply', (req, res) => {
+  const id = parseRecipeId(req.params.id);
+  if (id == null) return res.status(400).json({ error: 'invalid id' });
+  const menu = stmts.getMenu.get(id);
+  if (!menu) return res.status(404).json({ error: 'menu not found' });
+
+  const body = req.body || {};
+  if (typeof body.start_date !== 'string' || !DATE_RE.test(body.start_date)) {
+    return res.status(400).json({ error: 'start_date must be YYYY-MM-DD' });
+  }
+  const onConflict = body.on_conflict == null ? null : String(body.on_conflict);
+  if (onConflict != null && onConflict !== 'skip' && onConflict !== 'overwrite') {
+    return res.status(400).json({ error: 'on_conflict must be "skip" or "overwrite"' });
+  }
+
+  const filledSlots = stmts.getFilledMenuSlots.all(id);
+  if (filledSlots.length === 0) {
+    return res.json({ applied: 0, skipped: 0, conflicts: [] });
+  }
+
+  // Materialize: one (date, slot, eater) triple per filled slot.
+  const materialized = filledSlots.map((s) => ({
+    date: addDaysToIso(body.start_date, s.day_of_cycle),
+    slot: s.slot,
+    eater: s.eater,
+    recipe_id: s.recipe_id,
+    free_text: s.free_text,
+  }));
+
+  // Find conflicts in one range query, then intersect in JS.
+  const minDate = materialized.reduce((a, m) => (a < m.date ? a : m.date), materialized[0].date);
+  const maxDate = materialized.reduce((a, m) => (a > m.date ? a : m.date), materialized[0].date);
+  const existing = stmts.listPlannedMealsInRange.all({ start: minDate, end: maxDate });
+  const existingByKey = new Map();
+  for (const p of existing) existingByKey.set(`${p.date}|${p.slot}|${p.eater}`, p);
+
+  const conflicts = [];
+  for (const m of materialized) {
+    const e = existingByKey.get(`${m.date}|${m.slot}|${m.eater}`);
+    if (e) conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming: m });
+  }
+
+  if (conflicts.length && !onConflict) {
+    return res.status(409).json({
+      error: `${conflicts.length} cell${conflicts.length === 1 ? '' : 's'} conflict with existing meals`,
+      conflicts,
+    });
+  }
+
+  const apply = db.transaction(() => {
+    let applied = 0;
+    let skipped = 0;
+    for (const m of materialized) {
+      const key = `${m.date}|${m.slot}|${m.eater}`;
+      const conflict = existingByKey.get(key);
+      if (conflict) {
+        if (onConflict === 'skip') { skipped++; continue; }
+        stmts.deletePlannedMeal.run(conflict.id);
+      }
+      stmts.insertPlannedMeal.run({
+        date: m.date,
+        slot: m.slot,
+        eater: m.eater,
+        recipe_id: m.recipe_id,
+        free_text: m.free_text,
+        status: 'planned',
+        notes: null,
+        cooking_session_id: null,
+      });
+      applied++;
+    }
+    return { applied, skipped };
+  });
+
+  const result = apply();
+  res.json({ ok: true, ...result, conflicts: conflicts.length });
 });
 
 // ── Shopping lists ────────────────────────────────────────────────────────

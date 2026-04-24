@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS menu_slots (
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_menu_slots_menu ON menu_slots(menu_id);
+CREATE INDEX IF NOT EXISTS idx_menu_slots_menu_day ON menu_slots(menu_id, day_of_cycle);
 
 CREATE TABLE IF NOT EXISTS shopping_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
