@@ -246,11 +246,13 @@ const stmts = {
     ORDER BY s.day_of_cycle, s.slot, s.eater
   `),
   getFilledMenuSlots: db.prepare(`
-    SELECT day_of_cycle, slot, eater, recipe_id, free_text
-    FROM menu_slots
-    WHERE menu_id = ?
-      AND (recipe_id IS NOT NULL OR free_text IS NOT NULL)
-    ORDER BY day_of_cycle, slot, eater
+    SELECT s.day_of_cycle, s.slot, s.eater, s.recipe_id, s.free_text,
+           r.title AS recipe_title
+    FROM menu_slots s
+    LEFT JOIN recipes r ON r.id = s.recipe_id
+    WHERE s.menu_id = ?
+      AND (s.recipe_id IS NOT NULL OR s.free_text IS NOT NULL)
+    ORDER BY s.day_of_cycle, s.slot, s.eater
   `),
   insertMenu: db.prepare(`INSERT INTO menus (name) VALUES (@name)`),
   renameMenu: db.prepare(`UPDATE menus SET name = @name WHERE id = @id`),
@@ -930,6 +932,7 @@ app.post('/api/menus/:id/apply', (req, res) => {
     eater: s.eater,
     recipe_id: s.recipe_id,
     free_text: s.free_text,
+    recipe_title: s.recipe_title || null,
   }));
 
   // Find conflicts in one range query, then intersect in JS.

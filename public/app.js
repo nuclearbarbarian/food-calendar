@@ -1075,6 +1075,7 @@
   async function openMealModal({ mode, date, slot, eater, meal, context, hideNotes, saveHandler, deleteHandler, title, dateLabel }) {
     let actual = { date, slot, eater };
     let mealId = null;
+    // Always reinitialize current — a previous open's state must not leak.
     let current = { recipeId: '', freeText: '', notes: '', status: 'planned' };
     if (mode === 'edit' && meal) {
       actual = { date: meal.date || date, slot: meal.slot, eater: meal.eater };
@@ -1147,7 +1148,9 @@
     }
 
     $('meal-free-text').value = current.freeText;
-    $('meal-notes').value = current.notes;
+    // Reset notes unconditionally so a hidden notes field from a menu open
+    // can't carry stale text into a subsequent calendar open.
+    $('meal-notes').value = current.notes || '';
     $('meal-errors').hidden = true;
     $('meal-errors').textContent = '';
 
@@ -2552,7 +2555,12 @@
   }
 
   function renderMenuSlotSummary(slot, slotName, eater, day) {
-    const title = slot.recipe_id ? findRecipeTitle(slot.recipe_id) : slot.free_text;
+    // Prefer server-provided recipe_title (the GET /api/menus/:id query JOINs
+    // recipes), so deactivated recipes still render their real names instead
+    // of "recipe #N".
+    const title = slot.recipe_id
+      ? (slot.recipe_title || findRecipeTitle(slot.recipe_id))
+      : slot.free_text;
     return el(
       'div',
       {
@@ -2592,7 +2600,9 @@
       hideNotes: true,
       title: mode === 'edit' ? `Edit ${dayLabel(day)} slot` : `Plan ${dayLabel(day)}`,
       saveHandler: async ({ recipeId, freeText }) => {
-        const slots = menuState.active.slots.filter(
+        // Stash for rollback on persist failure.
+        const previous = menuState.active.slots;
+        const slots = previous.filter(
           (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
         );
         slots.push({
@@ -2603,14 +2613,25 @@
           free_text: freeText,
         });
         menuState.active.slots = slots;
-        await persistMenuSlots();
+        try {
+          await persistMenuSlots();
+        } catch (err) {
+          menuState.active.slots = previous;
+          throw err;
+        }
         renderMenuEditor();
       },
       deleteHandler: async () => {
-        menuState.active.slots = menuState.active.slots.filter(
+        const previous = menuState.active.slots;
+        menuState.active.slots = previous.filter(
           (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
         );
-        await persistMenuSlots();
+        try {
+          await persistMenuSlots();
+        } catch (err) {
+          menuState.active.slots = previous;
+          throw err;
+        }
         renderMenuEditor();
       },
     });
@@ -2684,8 +2705,11 @@
     const body = { start_date: startDate };
     if (onConflict) body.on_conflict = onConflict;
 
-    const confirmBtn = $('apply-confirm-btn');
-    confirmBtn.disabled = true;
+    // Disable all three apply buttons (only one is visible at a time, but
+    // a rapid double-click on overwrite/skip can fire two POSTs and the
+    // second hits a half-applied state — see Inquisitor C1).
+    const buttons = [$('apply-confirm-btn'), $('apply-overwrite-btn'), $('apply-skip-btn')];
+    for (const b of buttons) b.disabled = true;
     try {
       const result = await api('POST', `/api/menus/${applyTargetMenuId}/apply`, body);
       hideModal('menu-apply-modal');
@@ -2699,7 +2723,7 @@
         $('apply-errors').hidden = false;
       }
     } finally {
-      confirmBtn.disabled = false;
+      for (const b of buttons) b.disabled = false;
     }
   }
 
@@ -2713,7 +2737,7 @@
     for (const c of conflicts) {
       const existingTitle = c.existing.recipe_title || c.existing.free_text || '(meal)';
       const incomingTitle = c.incoming.recipe_id
-        ? findRecipeTitle(c.incoming.recipe_id)
+        ? (c.incoming.recipe_title || findRecipeTitle(c.incoming.recipe_id))
         : c.incoming.free_text || '(unset)';
       ul.appendChild(
         el(
