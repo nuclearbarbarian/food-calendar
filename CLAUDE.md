@@ -40,7 +40,7 @@ Three fixed: `breakfast`, `lunch`, `dinner`.
 - [x] Phase 3 — Morning email digest
 - [x] Phase 4 — Shopping list generator
 - [x] Phase 5 — Bi-weekly menu scheduler
-- [ ] Phase 6 — Photo→recipe Claude Code skill
+- [x] Phase 6 — Photo→recipe Claude Code skill (`skills/recipe-shelve.md`)
 - [ ] Phase 7 — Polish + deploy
 
 ## Deployment
