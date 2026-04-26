@@ -8,26 +8,34 @@ Read a recipe from a photo (cookbook page, recipe card, screenshot) and shelve i
 
 ### Install
 
-Symlink the skill into Claude Code's skills directory:
+From the repo root, symlink the skill into Claude Code's skills directory. The symlink means edits to the in-repo file are picked up immediately — no need to copy on every change.
 
 ```bash
 mkdir -p ~/.claude/skills
-ln -s /Users/emmetpenney/Food/skills/recipe-shelve.md ~/.claude/skills/recipe-shelve.md
+ln -s "$(pwd)/skills/recipe-shelve.md" ~/.claude/skills/recipe-shelve.md
 ```
 
-The symlink means edits to the in-repo file are picked up immediately — no need to copy on every change.
+If you cloned the repo somewhere other than `/Users/emmetpenney/Food/`, the `$(pwd)` makes the symlink point at your actual location.
 
 ### Set credentials once
 
-Add to `~/.zshrc` (or `~/.bashrc`):
+Find your shell rc file:
 
 ```bash
-export FOOD_BASE_URL="https://parkes-food.fly.dev"
+echo $SHELL
+# /bin/zsh → edit ~/.zshrc
+# /bin/bash → edit ~/.bashrc (or ~/.bash_profile on macOS)
+```
+
+Add:
+
+```bash
+export FOOD_BASE_URL="https://parkes-food.fly.dev"   # optional; this is the default
 export FOOD_AUTH_USER="Parke"
 export FOOD_AUTH_PASS="<the password from Fly secrets>"
 ```
 
-Reload your shell. The skill checks for these and refuses to run without them.
+Reload (`source ~/.zshrc` or `source ~/.bashrc`). The skill checks for `FOOD_AUTH_USER` and `FOOD_AUTH_PASS` and refuses to run without them.
 
 For local dev against `npm start` on port 3000, set `FOOD_BASE_URL=http://localhost:3000`.
 

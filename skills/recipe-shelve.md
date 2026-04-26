@@ -3,7 +3,7 @@ name: recipe-shelve
 description: Read a recipe from a photo (cookbook page, recipe card, screenshot) and shelve it into the Food calendar's recipe library. Uses vision OCR, maps units to the canonical list, asks the user to confirm each parsed field, and POSTs to the Food API.
 user-invocable: true
 disable-model-invocation: true
-argument-hint: [--slot breakfast|lunch|dinner] [--source "Cookbook name"] [--tried] <path-to-photo>
+argument-hint: [--slot breakfast|lunch|dinner | --slots b,l,d] [--source "Cookbook name"] [--tried] <path-to-photo>
 ---
 
 # Recipe Shelve
@@ -22,15 +22,15 @@ The user invokes this skill explicitly with `/recipe-shelve <photo>`. Don't trig
 
 Before doing anything else, check that these env vars are set:
 
-- `FOOD_BASE_URL` — defaults to `https://parkes-food.fly.dev` if unset. Set to `http://localhost:3000` for local dev.
-- `FOOD_AUTH_USER` — HTTP Basic Auth username
-- `FOOD_AUTH_PASS` — HTTP Basic Auth password
+- `FOOD_AUTH_USER` — HTTP Basic Auth username (**required**)
+- `FOOD_AUTH_PASS` — HTTP Basic Auth password (**required**)
+- `FOOD_BASE_URL` — **optional**. Defaults to `https://parkes-food.fly.dev` if unset. Set to `http://localhost:3000` for local dev.
 
-If `FOOD_AUTH_USER` or `FOOD_AUTH_PASS` is missing, stop immediately and tell the user:
+If either of the required vars is missing, stop immediately and tell the user:
 
-> The Food skill needs `FOOD_AUTH_USER` and `FOOD_AUTH_PASS` set in your shell environment. Add them to `~/.zshrc` (or whatever you use) and reload, then re-run.
+> The Food skill needs `FOOD_AUTH_USER` and `FOOD_AUTH_PASS` set in your shell environment. Find your shell with `echo $SHELL`, add the exports to the matching rc file (`~/.zshrc` for zsh, `~/.bashrc` for bash), `source` it, then re-run.
 
-Do not proceed without credentials. Never paste credentials into prompts or files.
+Do not proceed without credentials. **Never echo, log, or write credentials to any file** — see §8 for how to invoke curl without leaking them.
 
 ## Argument parsing
 
@@ -40,8 +40,11 @@ Parse `$ARGUMENTS` for these flags (order-independent, all optional):
 - `--slots <slot1,slot2>` — comma-separated equivalent of repeated `--slot`.
 - `--source "<text>"` — recipe source (cookbook name, URL, etc.). Quote if it has spaces.
 - `--tried` — mark the recipe as already-tried. Default is "want to make" (`tried=false`).
+- `--` — end-of-flags sentinel. Anything after `--` is the photo path, even if it starts with `-`.
 
-Everything else is the **photo path** (one path per invocation). Resolve `~` to `$HOME`.
+**Photo path handling:** everything not matching the above is the photo path, joined with single spaces. Mac filenames like `Screen Shot 2026-04-25 at 9.31.12 AM.png` work — treat all bare-word tokens after the last flag as one path. If two clearly distinct paths appear (both end in `.jpg`/`.png`/etc.), ask which one.
+
+Resolve `~` to `$HOME`. Quote when invoking shell commands so spaces don't split.
 
 ## Workflow
 
@@ -53,7 +56,7 @@ Read the image at the given path. If it doesn't exist, report and stop. If multi
 
 Look at the photo and extract:
 
-- **Title** — the recipe name. If multiple recipes are on the page, pick the most prominent one and note that there are others ("I see 'Pumpkin Soup' and 'Cornbread' on this page — I'll shelve Pumpkin Soup. Run again for the other.").
+- **Title** — the recipe name. If multiple recipes are visible on the page, list them and **ask** which one to shelve. Don't pick automatically. ("I see 'Pumpkin Soup' and 'Cornbread' on this page. Which should I shelve? You can re-run for the other.")
 - **Source** — if visible (cookbook chapter, magazine name, byline), capture it. Otherwise leave null and use the `--source` flag if provided.
 - **Ingredients** — every ingredient line with its quantity and unit, in the order shown. See unit mapping below.
 - **Steps** — the cooking instructions, preserving the order. Newline-separated. If the source uses numbered steps, keep the numbers in the text.
@@ -80,10 +83,15 @@ Map common phrasings:
 | `gram(s)`, `g` | `g` |
 | `kilogram(s)`, `kg` | `kg` |
 | `milliliter(s)`, `ml`, `mL` | `ml` |
-| `liter(s)`, `l`, `L` | `l` |
-| `pint`, `quart`, `gallon` | `pint` / `quart` / `gallon` |
+| `liter(s)`, `l`, `L`, `lt` | `l` |
+| `pint(s)`, `pt` | `pint` |
+| `quart(s)`, `qt` | `quart` |
+| `gallon(s)`, `gal` | `gallon` |
 | `pinch of`, `dash of`, `splash of` | `pinch` / `dash` / `dash` |
 | `to taste`, `as needed` | `to_taste` |
+| `stick(s)` of butter (US) | `tbsp` × 8 per stick (1 stick = 8 tbsp = 1/2 cup). Convert and note the original in the ingredient name ("butter (1 stick)") so Parke can verify. |
+| `clove(s)`, `head(s)`, `bunch(es)`, `can(s)`, `package(s)`/`pkg`, `bottle(s)` | `count`. Keep the noun in the ingredient name ("3 cloves garlic", "1 can crushed tomatoes"). |
+| Vague: `knob`, `drizzle`, `handful`, `splash` (without "of X"), `glug` | quantity null, unit `to_taste`, original word preserved in name ("butter (knob)"). |
 | Bare numbers ("2 eggs", "1 onion", "3 cloves garlic") | `count` |
 
 **Ambiguous cases — ask the user:**
@@ -98,7 +106,7 @@ Accept these forms and convert to decimal:
 
 - `1/2` → `0.5`
 - `1 1/2` → `1.5`
-- `½` → `0.5`, `¼` → `0.25`, `¾` → `0.75`, `⅓` → `0.333`, `⅔` → `0.667`
+- `½` → `0.5`, `¼` → `0.25`, `¾` → `0.75`, `⅓` → `0.3333`, `⅔` → `0.6667` (extra precision so three thirds sum close to 1)
 - `0.5`, `.5`, `1.` — all valid decimals
 - `2-3` (range) → use the lower bound (2) and add a note in the ingredient text ("2 to 3 onions")
 - "a few", "some", "to taste" → quantity null, unit `to_taste`
@@ -112,6 +120,8 @@ If the user passed `--slot` / `--slots` flags, use those (validate each is one o
 Otherwise **ask**:
 
 > Which meal slots? (breakfast / lunch / dinner — pick one or more, comma-separated)
+
+**Parsing the answer:** accept any reply containing one or more of the three slot words (case-insensitive substring match on `breakfast`, `lunch`, `dinner`). "Lunch and dinner" → `["lunch","dinner"]`. "B" / "L" / "D" alone are NOT accepted — require the full word. Confirm the parsed set back: "Got it: lunch, dinner. Continuing." If zero slot words match after two tries, abort and tell the user to re-run with `--slot`.
 
 Don't guess from recipe content (pancakes don't always = breakfast). Always ask if no flag was provided.
 
@@ -146,6 +156,8 @@ If the user replies with corrections like:
 
 Apply the change in your local representation and re-show the updated proposal. Repeat until they say "confirm" / "looks good" / "save it" / similar.
 
+**Confirmation guard:** if the reply contains an imperative correction verb (`change`, `remove`, `add`, `swap`, `fix`, `replace`, `delete`, `update`) treat the WHOLE message as corrections, even if it also contains "looks good" or "confirm". Re-display, don't shelve. Only shelve when the reply is purely affirmative ("looks good", "confirm", "save it", "yes", "ship it", etc.) with no correction verbs.
+
 ### 8. POST to the Food API
 
 Once confirmed, build the request body:
@@ -165,30 +177,54 @@ Once confirmed, build the request body:
 }
 ```
 
-Then call:
+**Credential safety rules — non-negotiable:**
+- Never put `$FOOD_AUTH_PASS` on a curl `-u` argv (it shows up in `ps`, in shell history with `set -x`, and in Claude Code's tool-invocation transcript).
+- Never write the password to any file — not even briefly.
+- Never echo the password.
+
+The safe pattern: pipe a curl config into curl on stdin. Curl reads `user = "USER:PASS"` from the config without ever exposing it to argv:
 
 ```bash
-curl -sS -X POST "${FOOD_BASE_URL:-https://parkes-food.fly.dev}/api/recipes" \
-  -u "$FOOD_AUTH_USER:$FOOD_AUTH_PASS" \
+PAYLOAD=$(mktemp -t recipe-payload.XXXXXX.json) || exit 1
+trap 'rm -f "$PAYLOAD"' EXIT
+
+cat > "$PAYLOAD" <<'JSON'
+{ ...the recipe JSON... }
+JSON
+
+# Write the curl config to stdin via a here-doc — never to disk.
+RESPONSE=$(mktemp -t recipe-response.XXXXXX) || exit 1
+trap 'rm -f "$PAYLOAD" "$RESPONSE"' EXIT
+
+STATUS=$(curl -sS -o "$RESPONSE" -w "%{http_code}" \
+  -X POST "${FOOD_BASE_URL:-https://parkes-food.fly.dev}/api/recipes" \
   -H "Content-Type: application/json" \
-  -d @/tmp/recipe-payload.json
+  -d @"$PAYLOAD" \
+  -K - <<CURL_CONFIG
+user = "${FOOD_AUTH_USER}:${FOOD_AUTH_PASS}"
+CURL_CONFIG
+)
 ```
 
-(Write the JSON to a temp file rather than passing inline to avoid shell-escaping headaches with quotes/newlines in steps.)
+The `-K -` reads curl options from stdin, the `<<CURL_CONFIG` heredoc supplies them inline. The password never appears in the command line, in environment-dump tools (`ps -E`), or in any persisted file.
+
+**On the temp files:** both `mktemp` invocations create unique files in `$TMPDIR` (typically `/var/folders/...` on macOS, owned by the user, 0600 by default). The `trap 'rm ... EXIT'` ensures deletion on every exit path including failure. Don't add the `set -x` flag — it would echo the heredoc contents.
 
 ### 9. Report the result
+
+Read `$RESPONSE` for the body and `$STATUS` for the code.
 
 On HTTP 201, print:
 
 > Shelved! Recipe #<id> "<title>" is in the library.
-> View at <FOOD_BASE_URL>/
+> Edit or delete at <FOOD_BASE_URL>/ if you spot a mistake.
 
-On HTTP 401: tell the user their credentials are wrong; don't retry.
-On HTTP 400: print the validation errors verbatim (the API returns `{errors: [...]}`); offer to let the user correct and re-confirm.
-On HTTP 5xx: print the status and body; suggest they retry.
-On any other failure: print the full curl output. Don't silently swallow.
+On HTTP 401: tell the user their credentials are wrong; don't retry. Suggest they re-check `FOOD_AUTH_USER` / `FOOD_AUTH_PASS`.
+On HTTP 400: print the validation errors verbatim (the API returns `{errors: [...]}`); offer to let the user correct and re-confirm. Keep the parsed structure in memory so re-confirm doesn't require re-reading the photo.
+On HTTP 5xx: print the status and body; suggest they retry in a moment.
+On any other failure: print the full response. Don't silently swallow.
 
-After shelving, clean up the temp file.
+The trap from §8 cleans up the temp files automatically on any exit path.
 
 ## What NOT to do
 
