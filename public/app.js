@@ -2347,6 +2347,392 @@
     initApplyModal();
   }
 
+  // ── Menus (bi-weekly templates) ──────────────────────────────────────────
+
+  // Day labels: Week 1 / Week 2, weekday-anchored Mon → Sun (day_of_cycle 0..13).
+  const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  function dayLabel(dayOfCycle) {
+    const week = dayOfCycle < 7 ? 'Week 1' : 'Week 2';
+    return `${week} ${WEEKDAY_LABELS[dayOfCycle % 7]}`;
+  }
+
+  const menuState = {
+    list: [],
+    active: null,        // { id, name, active, slots: [...] }
+    activeDay: 0,        // 0..13
+  };
+
+  async function loadMenus() {
+    menuState.list = await api('GET', '/api/menus');
+  }
+
+  function renderMenusPanel() {
+    const listWrap = $('menus-list');
+    const editorWrap = $('menu-editor');
+
+    if (menuState.active != null) {
+      listWrap.hidden = true;
+      editorWrap.hidden = false;
+      renderMenuEditor();
+      return;
+    }
+    listWrap.hidden = false;
+    editorWrap.hidden = true;
+
+    listWrap.innerHTML = '';
+    if (menuState.list.length === 0) {
+      listWrap.appendChild(
+        el(
+          'div',
+          { class: 'empty-state' },
+          el('div', { class: 'empty-state-ornament', 'aria-hidden': 'true' }, '✿ ❀ ✵ ❧ ✦'),
+          el('div', { class: 'empty-state-text' }, 'No menus yet.'),
+          el('div', { class: 'empty-state-sub' }, 'Click "+ New menu" to build a 14-day rotation you can apply to the calendar.')
+        )
+      );
+      return;
+    }
+    for (const m of menuState.list) listWrap.appendChild(renderMenuCard(m));
+  }
+
+  function renderMenuCard(menu) {
+    const meta = menu.filled_slot_count === 1 ? '1 slot filled' : `${menu.filled_slot_count} slots filled`;
+    return el(
+      'article',
+      {
+        class: `menu-card${menu.active ? '' : ' inactive'}`,
+        onclick: () => openMenuEditor(menu.id),
+      },
+      el('h3', { class: 'menu-card-name' }, menu.name),
+      el('div', { class: 'menu-card-meta' }, meta + (menu.active ? '' : ' · deactivated'))
+    );
+  }
+
+  async function openMenuEditor(id) {
+    const full = await api('GET', `/api/menus/${id}`);
+    menuState.active = full;
+    menuState.activeDay = 0;
+    renderMenusPanel();
+  }
+
+  function closeMenuEditor() {
+    menuState.active = null;
+    menuState.activeDay = 0;
+    renderMenusPanel();
+  }
+
+  function renderMenuEditor() {
+    const wrap = $('menu-editor');
+    wrap.innerHTML = '';
+    const menu = menuState.active;
+    if (!menu) return;
+
+    const nameInput = el('input', {
+      type: 'text',
+      class: 'detail-name-input',
+      value: menu.name,
+      maxlength: 200,
+    });
+    nameInput.addEventListener('change', async () => {
+      const name = nameInput.value.trim();
+      if (!name || name === menu.name) { nameInput.value = menu.name; return; }
+      try {
+        await api('PATCH', `/api/menus/${menu.id}`, { name });
+        menu.name = name;
+      } catch (err) { alert('Rename failed.'); nameInput.value = menu.name; }
+    });
+
+    const actions = el(
+      'div',
+      { class: 'detail-actions' },
+      el('button', { class: 'btn-primary', onclick: () => openApplyModal(menu.id) }, 'Apply this menu'),
+      el(
+        'button',
+        {
+          class: 'btn-ghost',
+          onclick: async () => {
+            const next = !menu.active;
+            await api('PATCH', `/api/menus/${menu.id}`, { active: next ? 1 : 0 });
+            menu.active = next;
+            renderMenuEditor();
+          },
+        },
+        menu.active ? 'Deactivate' : 'Reactivate'
+      ),
+      el('button', { class: 'btn-ghost btn-danger', onclick: () => handleDeleteMenu(menu.id) }, 'Delete'),
+      el('button', { class: 'btn-ghost', onclick: closeMenuEditor }, '← Back')
+    );
+
+    wrap.appendChild(el('header', { class: 'menu-editor-header' }, nameInput, actions));
+
+    const body = el('div', { class: 'menu-editor-body' });
+    body.appendChild(renderMenuDayStrip());
+    body.appendChild(renderMenuDayPanel());
+    wrap.appendChild(body);
+  }
+
+  function renderMenuDayStrip() {
+    const strip = el('div', { class: 'menu-day-strip' });
+    const slots = menuState.active.slots || [];
+    const countByDay = new Array(14).fill(0);
+    for (const s of slots) countByDay[s.day_of_cycle]++;
+
+    for (let week = 0; week < 2; week++) {
+      const group = el(
+        'div',
+        { class: 'menu-week-group' },
+        el('div', { class: 'menu-week-label' }, `Week ${week + 1}`)
+      );
+      for (let d = 0; d < 7; d++) {
+        const day = week * 7 + d;
+        const count = countByDay[day];
+        const isActive = menuState.activeDay === day;
+        group.appendChild(
+          el(
+            'button',
+            {
+              class: `menu-day-btn${isActive ? ' active' : ''}${count > 0 ? ' has-meals' : ''}`,
+              onclick: () => { menuState.activeDay = day; renderMenuEditor(); },
+            },
+            el('span', { class: 'day-weekday' }, WEEKDAY_LABELS[d]),
+            el('span', { class: 'day-index' }, `Day ${day + 1}`),
+            el('span', { class: 'day-count' }, count > 0 ? `${count}` : '')
+          )
+        );
+      }
+      strip.appendChild(group);
+    }
+    return strip;
+  }
+
+  function renderMenuDayPanel() {
+    const wrap = el('div', { class: 'menu-day-panel' });
+    const day = menuState.activeDay;
+    wrap.appendChild(el('div', { class: 'menu-day-title' }, dayLabel(day)));
+
+    const slots = menuState.active.slots || [];
+    const byKey = new Map();
+    for (const s of slots) {
+      if (s.day_of_cycle === day) byKey.set(`${s.slot}|${s.eater}`, s);
+    }
+
+    for (const slot of ['breakfast', 'lunch', 'dinner']) {
+      const group = el(
+        'div',
+        { class: 'slot-group' },
+        el('div', { class: 'slot-group-title' }, slot[0].toUpperCase() + slot.slice(1))
+      );
+      for (const eater of ['parke', 'emmet', 'shared']) {
+        const found = byKey.get(`${slot}|${eater}`);
+        const row = el(
+          'div',
+          { class: 'eater-row' },
+          el('span', { class: `eater-label eater-${eater}-label` }, EATER_LABELS[eater]),
+          el(
+            'div',
+            { class: 'eater-slot-content' },
+            found
+              ? renderMenuSlotSummary(found, slot, eater, day)
+              : el(
+                  'button',
+                  {
+                    class: 'add-meal-btn',
+                    onclick: () => openMenuSlotPicker({ mode: 'create', day, slot, eater }),
+                  },
+                  '+ add'
+                )
+          ),
+          el('span', {})
+        );
+        group.appendChild(row);
+      }
+      wrap.appendChild(group);
+    }
+    return wrap;
+  }
+
+  function renderMenuSlotSummary(slot, slotName, eater, day) {
+    const title = slot.recipe_id ? findRecipeTitle(slot.recipe_id) : slot.free_text;
+    return el(
+      'div',
+      {
+        class: 'meal-summary',
+        onclick: () => openMenuSlotPicker({ mode: 'edit', day, slot: slotName, eater, existing: slot }),
+      },
+      el('span', { class: 'meal-summary-title' }, title || '(unset)')
+    );
+  }
+
+  function findRecipeTitle(recipeId) {
+    // state.recipes (Phase 1 library cache) — fall back to the id.
+    const found = state.recipes && state.recipes.find((r) => r.id === recipeId);
+    return found ? found.title : `recipe #${recipeId}`;
+  }
+
+  // Adapter that opens the generic meal modal but routes save/delete through
+  // menu-local state. The full menu_slots array gets PUT after every change.
+  async function openMenuSlotPicker({ mode, day, slot, eater, existing }) {
+    const meal = existing
+      ? {
+          recipe_id: existing.recipe_id,
+          free_text: existing.free_text,
+          slot: existing.slot,
+          eater: existing.eater,
+          notes: '',
+        }
+      : null;
+
+    await openMealModal({
+      mode,
+      slot,
+      eater,
+      date: dayLabel(day),       // displayed only in the context badge
+      meal,
+      context: 'menu',
+      hideNotes: true,
+      title: mode === 'edit' ? `Edit ${dayLabel(day)} slot` : `Plan ${dayLabel(day)}`,
+      saveHandler: async ({ recipeId, freeText }) => {
+        const slots = menuState.active.slots.filter(
+          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
+        );
+        slots.push({
+          day_of_cycle: day,
+          slot,
+          eater,
+          recipe_id: recipeId,
+          free_text: freeText,
+        });
+        menuState.active.slots = slots;
+        await persistMenuSlots();
+        renderMenuEditor();
+      },
+      deleteHandler: async () => {
+        menuState.active.slots = menuState.active.slots.filter(
+          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
+        );
+        await persistMenuSlots();
+        renderMenuEditor();
+      },
+    });
+  }
+
+  async function persistMenuSlots() {
+    const id = menuState.active.id;
+    const result = await api('PUT', `/api/menus/${id}/slots`, {
+      slots: menuState.active.slots,
+    });
+    menuState.active.slots = result.slots;
+  }
+
+  async function handleDeleteMenu(id) {
+    if (!confirm('Delete this menu? This cannot be undone. Already-applied meals on the calendar are not affected.')) return;
+    await api('DELETE', `/api/menus/${id}`);
+    closeMenuEditor();
+    await loadMenus();
+    renderMenusPanel();
+  }
+
+  function initMenusPanel() {
+    $('new-menu-btn').addEventListener('click', async () => {
+      const name = prompt('Menu name?', `Menu — ${isoToday().slice(0, 7)}`);
+      if (!name || !name.trim()) return;
+      const created = await api('POST', '/api/menus', { name: name.trim() });
+      menuState.active = { ...created, slots: [] };
+      menuState.activeDay = 0;
+      await loadMenus();
+      renderMenusPanel();
+    });
+
+    // Apply modal handlers
+    $('apply-confirm-btn').addEventListener('click', () => handleApplyConfirm(null));
+    $('apply-overwrite-btn').addEventListener('click', () => handleApplyConfirm('overwrite'));
+    $('apply-skip-btn').addEventListener('click', () => handleApplyConfirm('skip'));
+  }
+
+  let applyTargetMenuId = null;
+  let applyConflictCount = 0;
+
+  function openApplyModal(menuId) {
+    applyTargetMenuId = menuId;
+    applyConflictCount = 0;
+    // Default start date: today.
+    $('apply-start-date').value = isoToday();
+    $('apply-errors').hidden = true;
+    $('apply-errors').textContent = '';
+    $('apply-conflicts').hidden = true;
+    $('apply-overwrite-btn').hidden = true;
+    $('apply-skip-btn').hidden = true;
+    $('apply-confirm-btn').hidden = false;
+    $('apply-confirm-btn').textContent = 'Apply menu';
+    showModal('menu-apply-modal');
+  }
+
+  async function handleApplyConfirm(onConflict) {
+    const startDate = $('apply-start-date').value;
+    if (!startDate) {
+      $('apply-errors').textContent = 'Pick a start date.';
+      $('apply-errors').hidden = false;
+      return;
+    }
+
+    if (onConflict === 'overwrite') {
+      if (!confirm(`This will replace ${applyConflictCount} existing meal${applyConflictCount === 1 ? '' : 's'} on the calendar. Continue?`)) {
+        return;
+      }
+    }
+
+    const body = { start_date: startDate };
+    if (onConflict) body.on_conflict = onConflict;
+
+    const confirmBtn = $('apply-confirm-btn');
+    confirmBtn.disabled = true;
+    try {
+      const result = await api('POST', `/api/menus/${applyTargetMenuId}/apply`, body);
+      hideModal('menu-apply-modal');
+      const skippedNote = result.skipped > 0 ? ` (skipped ${result.skipped} due to conflicts)` : '';
+      alert(`Applied ${result.applied} meal${result.applied === 1 ? '' : 's'} starting ${startDate}.${skippedNote}`);
+    } catch (err) {
+      if (err.status === 409 && err.data && err.data.conflicts) {
+        renderApplyConflicts(err.data.conflicts);
+      } else {
+        $('apply-errors').textContent = (err.data && err.data.error) || 'Apply failed.';
+        $('apply-errors').hidden = false;
+      }
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  }
+
+  function renderApplyConflicts(conflicts) {
+    applyConflictCount = conflicts.length;
+    const wrap = $('apply-conflicts');
+    const ul = $('conflict-list');
+    ul.innerHTML = '';
+    $('conflict-intro').textContent =
+      `${conflicts.length} cell${conflicts.length === 1 ? '' : 's'} would overwrite an existing meal. Pick one:`;
+    for (const c of conflicts) {
+      const existingTitle = c.existing.recipe_title || c.existing.free_text || '(meal)';
+      const incomingTitle = c.incoming.recipe_id
+        ? findRecipeTitle(c.incoming.recipe_id)
+        : c.incoming.free_text || '(unset)';
+      ul.appendChild(
+        el(
+          'li',
+          {},
+          el('span', { class: 'conflict-row-date' }, `${c.date}`),
+          el('span', { class: 'conflict-row-detail' }, ` · ${EATER_LABELS[c.eater]} ${c.slot}: `),
+          el('span', {}, existingTitle),
+          el('span', { class: 'conflict-arrow' }, '→'),
+          el('span', {}, incomingTitle)
+        )
+      );
+    }
+    wrap.hidden = false;
+    $('apply-confirm-btn').hidden = true;
+    $('apply-overwrite-btn').hidden = false;
+    $('apply-skip-btn').hidden = false;
+  }
+
   // ── Modal controller ─────────────────────────────────────────────────────
 
   function showModal(id) {
