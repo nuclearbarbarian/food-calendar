@@ -1070,24 +1070,22 @@ body.modal-open {
   background: var(--color-cream-dark);
 }
 
-.meal-chip.eater-parke {
-  background: var(--color-parke-tint);
-  border-left-color: var(--color-parke);
+/* Phase 8: chips tint by slot (matches the filter pills + slot badges). */
+.meal-chip.slot-chip-breakfast {
+  background: var(--color-butter-tint);
+  border-left-color: var(--color-butter);
 }
-
-.meal-chip.eater-emmet {
-  background: var(--color-emmet-tint);
-  border-left-color: var(--color-emmet);
+.meal-chip.slot-chip-lunch {
+  background: var(--color-mint-tint);
+  border-left-color: var(--color-mint);
 }
-
-.meal-chip.eater-shared {
-  background: var(--color-shared-tint);
-  border-left-color: var(--color-shared);
+.meal-chip.slot-chip-dinner {
+  background: var(--color-peach-tint);
+  border-left-color: var(--color-peach);
 }
-
 .meal-chip.free-text {
-  background: var(--color-cream);
-  border-left-color: var(--color-latte);
+  /* Slot tint stays; just dim the title slightly to signal "no recipe linked." */
+  font-style: italic;
 }
 
 .meal-chip.eaten {
@@ -1162,57 +1160,43 @@ body.modal-open {
   font-size: 12px;
 }
 
-.slot-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
+/* Phase 8: 3 slot rows (B/L/D), one per day. Replaces the 9-cell eater grid
+   and the prior .slot-group / .slot-group-title pattern. */
+.slot-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: var(--space-sm);
+  align-items: center;
+  padding: var(--space-xs) 0;
+  border-bottom: 1px dashed var(--color-latte);
 }
 
-.slot-group-title {
+.slot-row:last-of-type {
+  border-bottom: none;
+}
+
+.slot-row-label {
   font-family: var(--font-display-alt);
   font-size: var(--text-small);
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--color-soft-brown);
-  padding-top: var(--space-sm);
-  border-top: 1px dashed var(--color-latte);
-}
-
-.slot-group-title:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-
-.eater-row {
-  display: grid;
-  grid-template-columns: 68px 1fr auto;
-  gap: var(--space-xs);
-  align-items: center;
-}
-
-.eater-label {
-  font-family: var(--font-body);
-  font-size: var(--text-small);
-  font-weight: 600;
-  text-transform: capitalize;
-  padding: 2px var(--space-xs);
+  color: var(--color-cocoa);
+  padding: 4px var(--space-sm);
   border-radius: var(--radius-pill);
   text-align: center;
 }
 
-.eater-parke-label {
-  background: var(--color-parke-tint);
+.slot-row-breakfast .slot-row-label {
+  background: var(--color-butter-tint);
+}
+.slot-row-lunch .slot-row-label {
+  background: var(--color-mint-tint);
+}
+.slot-row-dinner .slot-row-label {
+  background: var(--color-peach-tint);
 }
 
-.eater-emmet-label {
-  background: var(--color-emmet-tint);
-}
-
-.eater-shared-label {
-  background: var(--color-shared-tint);
-}
-
-.eater-slot-content {
+.slot-row-content {
   min-width: 0;
 }
 
@@ -1382,43 +1366,7 @@ body.modal-open {
   color: var(--color-error);
 }
 
-/* Day view */
-
-.day-view-grid {
-  display: grid;
-  grid-template-columns: 100px repeat(3, 1fr);
-  gap: var(--space-sm);
-}
-
-.day-view-header {
-  font-family: var(--font-display-alt);
-  font-size: var(--text-small);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--color-soft-brown);
-  padding: var(--space-sm) 0;
-  text-align: center;
-}
-
-.day-view-cell {
-  background: var(--color-warm-white);
-  border: 1px solid var(--color-latte);
-  border-radius: var(--radius-md);
-  padding: var(--space-sm);
-  min-height: 80px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-.day-view-slot-label {
-  font-family: var(--font-display-alt);
-  font-size: var(--text-body);
-  color: var(--color-cocoa);
-  padding: var(--space-sm);
-  text-align: right;
-  align-self: center;
-}
+/* Day view dropped in Phase 8 — its rules removed. */
 
 /* Week view */
 
@@ -1518,9 +1466,6 @@ body.modal-open {
   .month-dow {
     font-size: 10px;
     padding: var(--space-xs) 2px;
-  }
-  .day-view-grid {
-    grid-template-columns: 70px 1fr 1fr 1fr;
   }
   .modal {
     padding: var(--space-md);

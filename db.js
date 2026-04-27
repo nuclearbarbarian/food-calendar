@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS planned_meals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date TEXT NOT NULL,
   slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner')),
-  eater TEXT NOT NULL CHECK (eater IN ('parke', 'emmet', 'shared')),
   recipe_id INTEGER,
   free_text TEXT,
   status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'eaten')),
@@ -47,12 +46,9 @@ CREATE TABLE IF NOT EXISTS planned_meals (
   FOREIGN KEY (cooking_session_id) REFERENCES cooking_sessions(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_planned_meals_date ON planned_meals(date);
--- A (date, slot, eater) triple is the logical unique key for planned meals.
--- The UI, cooking-session materialize, and Phase 5 menu apply all assume
--- at most one meal per cell. Enforce at the DB so duplicate writes surface
--- as constraint errors instead of silent double-books.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_triple
-  ON planned_meals(date, slot, eater);
+-- One meal per (date, slot). Phase 8 collapsed away the eater dimension.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_pair
+  ON planned_meals(date, slot);
 -- idx_planned_meals_session is created in openDb() after the ALTER TABLE
 -- migration adds cooking_session_id to pre-existing databases.
 
@@ -92,7 +88,6 @@ CREATE TABLE IF NOT EXISTS menu_slots (
   menu_id INTEGER NOT NULL,
   day_of_cycle INTEGER NOT NULL CHECK (day_of_cycle BETWEEN 0 AND 13),
   slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner')),
-  eater TEXT NOT NULL CHECK (eater IN ('parke', 'emmet', 'shared')),
   recipe_id INTEGER,
   free_text TEXT,
   CHECK (
@@ -105,6 +100,9 @@ CREATE TABLE IF NOT EXISTS menu_slots (
 );
 CREATE INDEX IF NOT EXISTS idx_menu_slots_menu ON menu_slots(menu_id);
 CREATE INDEX IF NOT EXISTS idx_menu_slots_menu_day ON menu_slots(menu_id, day_of_cycle);
+-- One slot per (menu, day, slot). Phase 8 collapsed away the eater dimension.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_slots_unique
+  ON menu_slots(menu_id, day_of_cycle, slot);
 
 CREATE TABLE IF NOT EXISTS shopping_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +148,61 @@ function openDb(dbPath) {
     db.exec(`ALTER TABLE planned_meals ADD COLUMN cooking_session_id INTEGER REFERENCES cooking_sessions(id) ON DELETE SET NULL`);
   } catch (_) { /* column exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_planned_meals_session ON planned_meals(cooking_session_id)`);
+
+  // Phase 8: drop the `eater` column from planned_meals + menu_slots if it
+  // still exists. Where multiple rows shared the same (date, slot) — one per
+  // eater — collapse to one with priority shared > parke > emmet.
+  const plannedCols = db.prepare(`PRAGMA table_info(planned_meals)`).all();
+  if (plannedCols.some((c) => c.name === 'eater')) {
+    const collapse = db.transaction(() => {
+      // Drop the old triple unique index first so dedupe deletes don't fail.
+      db.exec(`DROP INDEX IF EXISTS idx_planned_meals_triple`);
+      // Mark which row to keep per (date, slot) using window functions.
+      db.exec(`
+        DELETE FROM planned_meals WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY date, slot
+              ORDER BY CASE eater
+                WHEN 'shared' THEN 0
+                WHEN 'parke'  THEN 1
+                WHEN 'emmet'  THEN 2
+                ELSE 3
+              END, id
+            ) AS rn
+            FROM planned_meals
+          ) WHERE rn > 1
+        )
+      `);
+      db.exec(`ALTER TABLE planned_meals DROP COLUMN eater`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_pair ON planned_meals(date, slot)`);
+    });
+    collapse();
+  }
+  const menuSlotCols = db.prepare(`PRAGMA table_info(menu_slots)`).all();
+  if (menuSlotCols.some((c) => c.name === 'eater')) {
+    const collapseMenu = db.transaction(() => {
+      db.exec(`
+        DELETE FROM menu_slots WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY menu_id, day_of_cycle, slot
+              ORDER BY CASE eater
+                WHEN 'shared' THEN 0
+                WHEN 'parke'  THEN 1
+                WHEN 'emmet'  THEN 2
+                ELSE 3
+              END, id
+            ) AS rn
+            FROM menu_slots
+          ) WHERE rn > 1
+        )
+      `);
+      db.exec(`ALTER TABLE menu_slots DROP COLUMN eater`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_slots_unique ON menu_slots(menu_id, day_of_cycle, slot)`);
+    });
+    collapseMenu();
+  }
 
   // One-time backfill: copy legacy recipes.slot_categories JSON into the
   // recipe_slots join table for any rows that haven't been migrated. Wrapped

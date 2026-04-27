@@ -15,18 +15,23 @@ const COLORS = {
   cocoa: '#5B4A3F',
   softBrown: '#8B7B6B',
   latte: '#D4C5B2',
-  parkeTint: '#FDEDF0',
-  parke: '#F2A0B0',
-  emmetTint: '#E8F1F8',
-  emmet: '#8CBCE0',
-  sharedTint: '#F0EBF6',
-  shared: '#B8A0D4',
+  sakura: '#F2A0B0',
+  // Slot tints (matches the calendar chips since Phase 8 dropped eater colors).
+  butter: '#F0D070',
+  butterTint: '#FCF5E0',
+  mint: '#8DD4A8',
+  mintTint: '#E8F6EE',
+  peach: '#F0B088',
+  peachTint: '#FCEEE4',
 };
 
-const EATER_ORDER = ['parke', 'emmet', 'shared'];
-const EATER_LABELS = { parke: 'Parke', emmet: 'Emmet', shared: 'Shared' };
 const SLOT_ORDER = ['breakfast', 'lunch', 'dinner'];
 const SLOT_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
+const SLOT_ACCENTS = {
+  breakfast: { tint: '#FCF5E0', accent: '#F0D070' },
+  lunch:     { tint: '#E8F6EE', accent: '#8DD4A8' },
+  dinner:    { tint: '#FCEEE4', accent: '#F0B088' },
+};
 
 function mealTitle(meal) {
   if (meal.recipe_id) return meal.recipe_title || '(recipe missing)';
@@ -57,51 +62,29 @@ function formatFriendlyDate(isoDate) {
   }).format(date);
 }
 
+// Phase 8 kept this exported for backward compat; no callers now.
 function groupByEater(meals) {
-  const buckets = { parke: [], emmet: [], shared: [] };
-  for (const meal of meals) {
-    if (buckets[meal.eater]) buckets[meal.eater].push(meal);
-  }
-  for (const list of Object.values(buckets)) {
-    list.sort((a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot));
-  }
-  return buckets;
+  return { all: [...meals].sort((a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot)) };
+}
+
+function sortBySlot(meals) {
+  return [...meals].sort((a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot));
 }
 
 function buildDigestHtml({ date, meals }) {
   const friendly = formatFriendlyDate(date);
-  const buckets = groupByEater(meals);
+  const sorted = sortBySlot(meals);
 
-  const eaterSections = EATER_ORDER.map((eater) => {
-    const list = buckets[eater];
-    if (list.length === 0) return '';
-    const tint = COLORS[`${eater}Tint`];
-    const accent = COLORS[eater];
-    const rows = list.map((meal) => renderMealRow(meal, accent)).join('');
-    return `
-      <tr><td style="padding-bottom: 28px;">
-        <div style="
-          font-family: Georgia, 'EB Garamond', serif;
-          font-size: 18px;
-          font-weight: 600;
-          color: ${COLORS.cocoa};
-          background: ${tint};
-          border-left: 4px solid ${accent};
-          padding: 8px 14px;
-          margin: 0 0 12px 0;
-          border-radius: 4px;
-        ">${escapeHtml(EATER_LABELS[eater])}</div>
-        ${rows}
-      </td></tr>
-    `;
+  const rows = sorted.map((meal) => {
+    const accent = SLOT_ACCENTS[meal.slot] || SLOT_ACCENTS.dinner;
+    return renderMealRow(meal, accent.accent, accent.tint);
   }).join('');
 
-  const allEmpty = EATER_ORDER.every((e) => buckets[e].length === 0);
-  const body = allEmpty
+  const body = sorted.length === 0
     ? `<tr><td style="color: ${COLORS.softBrown}; font-style: italic; padding: 24px 0;">
          Nothing planned yet. Open the calendar to add meals.
        </td></tr>`
-    : eaterSections;
+    : `<tr><td>${rows}</td></tr>`;
 
   // Wrap ornament in a symbol-friendly font stack so Outlook Desktop doesn't
   // substitute a box or Wingdings glyph. Keeps the illuminated-manuscript vibe.
@@ -143,7 +126,7 @@ function buildDigestHtml({ date, meals }) {
 </html>`;
 }
 
-function renderMealRow(meal, accent) {
+function renderMealRow(meal, accent, tint) {
   const title = mealTitle(meal);
   const isEaten = meal.status === 'eaten';
   const titleStyle = isEaten
@@ -175,8 +158,8 @@ function renderMealRow(meal, accent) {
     : '';
 
   return `
-    <div style="padding: 8px 0 10px 0; border-bottom: 1px dashed ${COLORS.latte};">
-      <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: ${COLORS.softBrown}; margin-bottom: 2px;">
+    <div style="padding: 10px 0 12px 0; border-bottom: 1px dashed ${COLORS.latte};">
+      <div style="display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: ${COLORS.cocoa}; background: ${tint}; border-left: 3px solid ${accent}; padding: 2px 8px; margin-bottom: 4px;">
         ${escapeHtml(SLOT_LABELS[meal.slot])}
       </div>
       <div style="font-size: 16px; font-weight: 600; ${titleStyle}">
@@ -191,7 +174,6 @@ function renderMealRow(meal, accent) {
 
 function buildDigestText({ date, meals }) {
   const friendly = formatFriendlyDate(date);
-  const buckets = groupByEater(meals);
   const lines = [`Today's menu — ${friendly}`, ''];
 
   if (meals.length === 0) {
@@ -199,23 +181,18 @@ function buildDigestText({ date, meals }) {
     return lines.join('\n');
   }
 
-  for (const eater of EATER_ORDER) {
-    const list = buckets[eater];
-    if (list.length === 0) continue;
-    lines.push(`— ${EATER_LABELS[eater]} —`);
-    for (const meal of list) {
-      const prefix = meal.status === 'eaten' ? '[eaten] ' : '';
-      const glyph = meal.cooking_session_id ? '(from cook session) ' : '';
-      const title = mealTitle(meal);
-      lines.push(`  ${SLOT_LABELS[meal.slot]}: ${prefix}${glyph}${title}`);
-      if (meal.recipe_source) lines.push(`    via ${meal.recipe_source}`);
-      if (meal.slot === 'dinner' && meal.recipe_steps && meal.recipe_steps.trim()) {
-        lines.push(`    Prep: ${meal.recipe_steps.replace(/\s+/g, ' ').trim()}`);
-      }
-      if (meal.notes && meal.notes.trim()) lines.push(`    Note: ${meal.notes}`);
+  for (const meal of sortBySlot(meals)) {
+    const prefix = meal.status === 'eaten' ? '[eaten] ' : '';
+    const glyph = meal.cooking_session_id ? '(from cook session) ' : '';
+    const title = mealTitle(meal);
+    lines.push(`  ${SLOT_LABELS[meal.slot]}: ${prefix}${glyph}${title}`);
+    if (meal.recipe_source) lines.push(`    via ${meal.recipe_source}`);
+    if (meal.slot === 'dinner' && meal.recipe_steps && meal.recipe_steps.trim()) {
+      lines.push(`    Prep: ${meal.recipe_steps.replace(/\s+/g, ' ').trim()}`);
     }
-    lines.push('');
+    if (meal.notes && meal.notes.trim()) lines.push(`    Note: ${meal.notes}`);
   }
+  lines.push('');
   lines.push('From the Food calendar');
   return lines.join('\n');
 }

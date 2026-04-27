@@ -670,7 +670,9 @@
 
   const SLOT_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
   const SLOT_ORDER = { breakfast: 0, lunch: 1, dinner: 2 };
-  const EATER_LABELS = { parke: 'Parke', emmet: 'Emmet', shared: 'Shared' };
+  // Phase 8 dropped the eater dimension. EATER_LABELS retained as empty
+  // map so any leftover refs return undefined (visible as empty strings).
+  const EATER_LABELS = {};
 
   const cal = {
     view: 'month',
@@ -764,10 +766,8 @@
       d.setUTCDate(1);
       d.setUTCMonth(d.getUTCMonth() + direction);
       cal.focusDate = isoFormat(d);
-    } else if (cal.view === 'week') {
-      cal.focusDate = addDays(cal.focusDate, direction * 7);
     } else {
-      cal.focusDate = addDays(cal.focusDate, direction);
+      cal.focusDate = addDays(cal.focusDate, direction * 7);
     }
     cal.selectedDate = null;
     renderCalendar();
@@ -790,16 +790,13 @@
       title.textContent = monthLabel(cal.focusDate);
       await loadMealsForRange(gridStart, gridEnd);
       renderMonthView(main, first, gridStart);
-    } else if (cal.view === 'week') {
+    } else {
+      // Week view (only non-month view in Phase 8+)
       const weekStart = addDays(cal.focusDate, -dayOfWeek(cal.focusDate));
       const weekEnd = addDays(weekStart, 6);
       title.textContent = `${prettyDateLabel(weekStart)} — ${prettyDateLabel(weekEnd)}`;
       await loadMealsForRange(weekStart, weekEnd);
       renderWeekView(main, weekStart);
-    } else {
-      title.textContent = prettyDateLabel(cal.focusDate);
-      await loadMealsForRange(cal.focusDate, cal.focusDate);
-      renderDayView(main, cal.focusDate);
     }
 
     if (cal.selectedDate) {
@@ -874,8 +871,8 @@
 
   function renderChip(meal) {
     const cls = ['meal-chip'];
-    if (meal.recipe_id) cls.push(`eater-${meal.eater}`);
-    else cls.push('free-text', `eater-${meal.eater}`);
+    cls.push(`slot-chip-${meal.slot}`);
+    if (!meal.recipe_id) cls.push('free-text');
     if (meal.status === 'eaten') cls.push('eaten');
 
     const chip = el(
@@ -885,8 +882,8 @@
         draggable: 'true',
         tabindex: '0',
         role: 'button',
-        'aria-label': `Edit ${EATER_LABELS[meal.eater]}'s ${meal.slot}: ${mealTitle(meal)}${meal.status === 'eaten' ? ' (eaten)' : ''}`,
-        title: `${EATER_LABELS[meal.eater]} · ${meal.slot} · ${mealTitle(meal)}`,
+        'aria-label': `Edit ${meal.slot}: ${mealTitle(meal)}${meal.status === 'eaten' ? ' (eaten)' : ''}`,
+        title: `${meal.slot.charAt(0).toUpperCase() + meal.slot.slice(1)} · ${mealTitle(meal)}`,
       },
       el('span', { class: 'slot-letter', 'aria-hidden': 'true' }, SLOT_LETTERS[meal.slot]),
       meal.cooking_session_id ? el('span', { class: 'session-glyph', 'aria-hidden': 'true' }, '🍳') : null,
@@ -934,7 +931,7 @@
       if (err.status === 409) {
         alertDialog({
           title: 'Slot taken',
-          body: 'That day already has a meal for this slot and eater. Delete or move the existing one first.',
+          body: 'That day already has a meal for this slot. Delete or move the existing one first.',
         });
       } else {
         console.error('Reschedule failed', err);
@@ -973,41 +970,8 @@
     main.appendChild(grid);
   }
 
-  // ── Day view ─────────────────────────────────────────────────────────────
-
-  function renderDayView(main, date) {
-    const meals = mealsOnDate(date);
-    const grid = el('div', { class: 'day-view-grid' });
-    grid.appendChild(el('div', { class: 'day-view-header' }, ''));
-    for (const eater of ['parke', 'emmet', 'shared']) {
-      grid.appendChild(el('div', { class: 'day-view-header' }, EATER_LABELS[eater]));
-    }
-    for (const slot of ['breakfast', 'lunch', 'dinner']) {
-      grid.appendChild(
-        el('div', { class: 'day-view-slot-label' }, slot[0].toUpperCase() + slot.slice(1))
-      );
-      for (const eater of ['parke', 'emmet', 'shared']) {
-        const cell = el('div', { class: 'day-view-cell' });
-        const found = meals.find((m) => m.slot === slot && m.eater === eater);
-        if (found) {
-          cell.appendChild(renderMealSummary(found));
-        } else {
-          cell.appendChild(
-            el(
-              'button',
-              {
-                class: 'add-meal-btn',
-                onclick: () => openMealModal({ mode: 'create', date, slot, eater }),
-              },
-              '+ add'
-            )
-          );
-        }
-        grid.appendChild(cell);
-      }
-    }
-    main.appendChild(grid);
-  }
+  // (Day view dropped in Phase 8 — once eater is gone, the 3×3 grid collapses
+  // to 3 rows, which is exactly what the day side panel already shows.)
 
   // ── Day side panel (month / week view sidebar) ──────────────────────────
 
@@ -1037,36 +1001,28 @@
 
     const meals = mealsOnDate(date);
     for (const slot of ['breakfast', 'lunch', 'dinner']) {
-      const group = el(
+      const found = meals.find((m) => m.slot === slot);
+      const row = el(
         'div',
-        { class: 'slot-group' },
-        el('div', { class: 'slot-group-title' }, slot[0].toUpperCase() + slot.slice(1))
-      );
-      for (const eater of ['parke', 'emmet', 'shared']) {
-        const found = meals.find((m) => m.slot === slot && m.eater === eater);
-        const row = el(
+        { class: `slot-row slot-row-${slot}` },
+        el('div', { class: 'slot-row-label' }, slot[0].toUpperCase() + slot.slice(1)),
+        el(
           'div',
-          { class: 'eater-row' },
-          el('span', { class: `eater-label eater-${eater}-label` }, EATER_LABELS[eater]),
-          el(
-            'div',
-            { class: 'eater-slot-content' },
-            found
-              ? renderMealSummary(found)
-              : el(
-                  'button',
-                  {
-                    class: 'add-meal-btn',
-                    onclick: () => openMealModal({ mode: 'create', date, slot, eater }),
-                  },
-                  '+ add'
-                )
-          ),
-          found ? renderEatenToggle(found) : el('span', {})
-        );
-        group.appendChild(row);
-      }
-      side.appendChild(group);
+          { class: 'slot-row-content' },
+          found
+            ? renderMealSummary(found)
+            : el(
+                'button',
+                {
+                  class: 'add-meal-btn',
+                  onclick: () => openMealModal({ mode: 'create', date, slot }),
+                },
+                '+ add'
+              )
+        ),
+        found ? renderEatenToggle(found) : el('span', {})
+      );
+      side.appendChild(row);
     }
   }
 
@@ -1110,7 +1066,7 @@
   // Optional override: if set, save/delete call these instead of the default
   // planned-meal API flow. Used by the menu editor to reuse the picker UI
   // while persisting to menu_slots via a different path.
-  let mealModalState = null; // { mode, date, slot, eater, mealId?, context, hideNotes, saveHandler?, deleteHandler? }
+  let mealModalState = null; // { mode, date, slot, mealId?, context, hideNotes, saveHandler?, deleteHandler? }
 
   function initMealModal() {
     $('meal-save').addEventListener('click', handleMealSave);
@@ -1131,13 +1087,13 @@
     }
   }
 
-  async function openMealModal({ mode, date, slot, eater, meal, context, hideNotes, saveHandler, deleteHandler, title, dateLabel }) {
-    let actual = { date, slot, eater };
+  async function openMealModal({ mode, date, slot, meal, context, hideNotes, saveHandler, deleteHandler, title, dateLabel }) {
+    let actual = { date, slot };
     let mealId = null;
     // Always reinitialize current — a previous open's state must not leak.
     let current = { recipeId: '', freeText: '', notes: '', status: 'planned' };
     if (mode === 'edit' && meal) {
-      actual = { date: meal.date || date, slot: meal.slot, eater: meal.eater };
+      actual = { date: meal.date || date, slot: meal.slot };
       mealId = meal.id;
       current = {
         recipeId: meal.recipe_id ? String(meal.recipe_id) : '',
@@ -1170,10 +1126,10 @@
     // Context badge — what are we planning?
     const ctx = $('meal-context');
     ctx.innerHTML = '';
-    ctx.appendChild(el('span', { class: `meal-context-badge eater-${actual.eater}-label` }, EATER_LABELS[actual.eater]));
+    ctx.appendChild(el('span', { class: `meal-context-badge slot-badge slot-${actual.slot}` }, actual.slot.charAt(0).toUpperCase() + actual.slot.slice(1)));
     const contextSuffix = mealModalState.context === 'menu'
-      ? ` · ${actual.slot} · ${mealModalState.dateLabel}`
-      : ` · ${actual.slot} · ${prettyDateLabel(actual.date)}`;
+      ? ` · ${mealModalState.dateLabel || actual.date}`
+      : ` · ${prettyDateLabel(actual.date)}`;
     ctx.appendChild(el('span', {}, contextSuffix));
 
     // Populate recipe dropdown (filtered to this slot).
@@ -1240,7 +1196,6 @@
         await mealModalState.saveHandler({
           mode: mealModalState.mode,
           slot: mealModalState.slot,
-          eater: mealModalState.eater,
           recipeId: recipeId ? Number(recipeId) : null,
           freeText: freeText || null,
           mealId: mealModalState.mealId,
@@ -1252,7 +1207,6 @@
         const body = {
           date: mealModalState.date,
           slot: mealModalState.slot,
-          eater: mealModalState.eater,
           notes,
         };
         if (recipeId) body.recipe_id = Number(recipeId);
@@ -1298,7 +1252,6 @@
         if (!ok) { btn.disabled = false; return; }
         await mealModalState.deleteHandler({
           slot: mealModalState.slot,
-          eater: mealModalState.eater,
           mealId: mealModalState.mealId,
         });
         hideModal('meal-modal');
@@ -1364,9 +1317,9 @@
     }
 
     $('cook-serves-rows').innerHTML = '';
-    // Default: two serve rows for shared dinner on cook date and the next day.
-    addServesRow({ date: today, slot: 'dinner', eater: 'shared' });
-    addServesRow({ date: addDays(today, 1), slot: 'dinner', eater: 'shared' });
+    // Default: two serve rows for dinner on cook date and the next day.
+    addServesRow({ date: today, slot: 'dinner' });
+    addServesRow({ date: addDays(today, 1), slot: 'dinner' });
 
     showModal('cook-modal');
     sel.focus();
@@ -1385,19 +1338,11 @@
       else if (!prefill && s === 'dinner') opt.selected = true;
       slotSel.appendChild(opt);
     }
-    const eaterSel = el('select', {});
-    for (const e of ['parke', 'emmet', 'shared']) {
-      const opt = el('option', { value: e }, EATER_LABELS[e]);
-      if (prefill && prefill.eater === e) opt.selected = true;
-      else if (!prefill && e === 'shared') opt.selected = true;
-      eaterSel.appendChild(opt);
-    }
     const row = el(
       'div',
       { class: 'serves-row' },
       dateInput,
       slotSel,
-      eaterSel,
       el(
         'button',
         {
@@ -1426,8 +1371,8 @@
 
     const serves = $$('.serves-row', $('cook-serves-rows'))
       .map((row) => {
-        const [dateInput, slotSel, eaterSel] = row.querySelectorAll('input, select');
-        return { date: dateInput.value, slot: slotSel.value, eater: eaterSel.value };
+        const [dateInput, slotSel] = row.querySelectorAll('input, select');
+        return { date: dateInput.value, slot: slotSel.value };
       })
       .filter((s) => s.date);
     if (serves.length === 0) errors.push('Add at least one meal the cooking feeds.');
@@ -2178,45 +2123,37 @@
     const slots = menuState.active.slots || [];
     const byKey = new Map();
     for (const s of slots) {
-      if (s.day_of_cycle === day) byKey.set(`${s.slot}|${s.eater}`, s);
+      if (s.day_of_cycle === day) byKey.set(s.slot, s);
     }
 
     for (const slot of ['breakfast', 'lunch', 'dinner']) {
-      const group = el(
+      const found = byKey.get(slot);
+      const row = el(
         'div',
-        { class: 'slot-group' },
-        el('div', { class: 'slot-group-title' }, slot[0].toUpperCase() + slot.slice(1))
-      );
-      for (const eater of ['parke', 'emmet', 'shared']) {
-        const found = byKey.get(`${slot}|${eater}`);
-        const row = el(
+        { class: `slot-row slot-row-${slot}` },
+        el('div', { class: 'slot-row-label' }, slot[0].toUpperCase() + slot.slice(1)),
+        el(
           'div',
-          { class: 'eater-row' },
-          el('span', { class: `eater-label eater-${eater}-label` }, EATER_LABELS[eater]),
-          el(
-            'div',
-            { class: 'eater-slot-content' },
-            found
-              ? renderMenuSlotSummary(found, slot, eater, day)
-              : el(
-                  'button',
-                  {
-                    class: 'add-meal-btn',
-                    onclick: () => openMenuSlotPicker({ mode: 'create', day, slot, eater }),
-                  },
-                  '+ add'
-                )
-          ),
-          el('span', {})
-        );
-        group.appendChild(row);
-      }
-      wrap.appendChild(group);
+          { class: 'slot-row-content' },
+          found
+            ? renderMenuSlotSummary(found, slot, day)
+            : el(
+                'button',
+                {
+                  class: 'add-meal-btn',
+                  onclick: () => openMenuSlotPicker({ mode: 'create', day, slot }),
+                },
+                '+ add'
+              )
+        ),
+        el('span', {})
+      );
+      wrap.appendChild(row);
     }
     return wrap;
   }
 
-  function renderMenuSlotSummary(slot, slotName, eater, day) {
+  function renderMenuSlotSummary(slot, slotName, day) {
     // Prefer server-provided recipe_title (the GET /api/menus/:id query JOINs
     // recipes), so deactivated recipes still render their real names instead
     // of "recipe #N".
@@ -2227,7 +2164,7 @@
       'div',
       {
         class: 'meal-summary',
-        onclick: () => openMenuSlotPicker({ mode: 'edit', day, slot: slotName, eater, existing: slot }),
+        onclick: () => openMenuSlotPicker({ mode: 'edit', day, slot: slotName, existing: slot }),
       },
       el('span', { class: 'meal-summary-title' }, title || '(unset)')
     );
@@ -2241,13 +2178,12 @@
 
   // Adapter that opens the generic meal modal but routes save/delete through
   // menu-local state. The full menu_slots array gets PUT after every change.
-  async function openMenuSlotPicker({ mode, day, slot, eater, existing }) {
+  async function openMenuSlotPicker({ mode, day, slot, existing }) {
     const meal = existing
       ? {
           recipe_id: existing.recipe_id,
           free_text: existing.free_text,
           slot: existing.slot,
-          eater: existing.eater,
           notes: '',
         }
       : null;
@@ -2255,8 +2191,8 @@
     await openMealModal({
       mode,
       slot,
-      eater,
       date: dayLabel(day),       // displayed only in the context badge
+      dateLabel: dayLabel(day),
       meal,
       context: 'menu',
       hideNotes: true,
@@ -2265,12 +2201,11 @@
         // Stash for rollback on persist failure.
         const previous = menuState.active.slots;
         const slots = previous.filter(
-          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
+          (s) => !(s.day_of_cycle === day && s.slot === slot)
         );
         slots.push({
           day_of_cycle: day,
           slot,
-          eater,
           recipe_id: recipeId,
           free_text: freeText,
         });
@@ -2286,7 +2221,7 @@
       deleteHandler: async () => {
         const previous = menuState.active.slots;
         menuState.active.slots = previous.filter(
-          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
+          (s) => !(s.day_of_cycle === day && s.slot === slot)
         );
         try {
           await persistMenuSlots();
@@ -2438,7 +2373,7 @@
           'li',
           {},
           el('span', { class: 'conflict-row-date' }, `${c.date}`),
-          el('span', { class: 'conflict-row-detail' }, ` · ${EATER_LABELS[c.eater]} ${c.slot}: `),
+          el('span', { class: 'conflict-row-detail' }, ` · ${c.slot}: `),
           el('span', {}, existingTitle),
           el('span', { class: 'conflict-arrow' }, '→'),
           el('span', {}, incomingTitle)

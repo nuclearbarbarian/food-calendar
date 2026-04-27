@@ -5,7 +5,6 @@ const path = require('path');
 const express = require('express');
 const { openDb } = require('./db');
 const {
-  EATERS,
   SLOTS,
   UNITS,
   UNIT_LABELS,
@@ -121,17 +120,17 @@ const stmts = {
   // Planned meals
   listPlannedMealsInRange: db.prepare(`
     SELECT
-      p.id, p.date, p.slot, p.eater, p.recipe_id, p.free_text,
+      p.id, p.date, p.slot, p.recipe_id, p.free_text,
       p.status, p.notes, p.cooking_session_id, p.created_at,
       r.title AS recipe_title, r.source AS recipe_source, r.steps AS recipe_steps
     FROM planned_meals p
     LEFT JOIN recipes r ON r.id = p.recipe_id
     WHERE p.date >= @start AND p.date <= @end
-    ORDER BY p.date, p.slot, p.eater
+    ORDER BY p.date, p.slot
   `),
   getPlannedMeal: db.prepare(`
     SELECT
-      p.id, p.date, p.slot, p.eater, p.recipe_id, p.free_text,
+      p.id, p.date, p.slot, p.recipe_id, p.free_text,
       p.status, p.notes, p.cooking_session_id, p.created_at,
       r.title AS recipe_title
     FROM planned_meals p
@@ -139,14 +138,13 @@ const stmts = {
     WHERE p.id = ?
   `),
   insertPlannedMeal: db.prepare(`
-    INSERT INTO planned_meals (date, slot, eater, recipe_id, free_text, status, notes, cooking_session_id)
-    VALUES (@date, @slot, @eater, @recipe_id, @free_text, @status, @notes, @cooking_session_id)
+    INSERT INTO planned_meals (date, slot, recipe_id, free_text, status, notes, cooking_session_id)
+    VALUES (@date, @slot, @recipe_id, @free_text, @status, @notes, @cooking_session_id)
   `),
   updatePlannedMeal: db.prepare(`
     UPDATE planned_meals
     SET date = COALESCE(@date, date),
         slot = COALESCE(@slot, slot),
-        eater = COALESCE(@eater, eater),
         recipe_id = CASE WHEN @clear_recipe = 1 THEN NULL ELSE COALESCE(@recipe_id, recipe_id) END,
         free_text = CASE WHEN @clear_free_text = 1 THEN NULL ELSE COALESCE(@free_text, free_text) END,
         status = COALESCE(@status, status),
@@ -236,22 +234,22 @@ const stmts = {
   `),
   getMenuSlots: db.prepare(`
     SELECT
-      s.id, s.menu_id, s.day_of_cycle, s.slot, s.eater,
+      s.id, s.menu_id, s.day_of_cycle, s.slot,
       s.recipe_id, s.free_text,
       r.title AS recipe_title
     FROM menu_slots s
     LEFT JOIN recipes r ON r.id = s.recipe_id
     WHERE s.menu_id = ?
-    ORDER BY s.day_of_cycle, s.slot, s.eater
+    ORDER BY s.day_of_cycle, s.slot
   `),
   getFilledMenuSlots: db.prepare(`
-    SELECT s.day_of_cycle, s.slot, s.eater, s.recipe_id, s.free_text,
+    SELECT s.day_of_cycle, s.slot, s.recipe_id, s.free_text,
            r.title AS recipe_title
     FROM menu_slots s
     LEFT JOIN recipes r ON r.id = s.recipe_id
     WHERE s.menu_id = ?
       AND (s.recipe_id IS NOT NULL OR s.free_text IS NOT NULL)
-    ORDER BY s.day_of_cycle, s.slot, s.eater
+    ORDER BY s.day_of_cycle, s.slot
   `),
   insertMenu: db.prepare(`INSERT INTO menus (name) VALUES (@name)`),
   renameMenu: db.prepare(`UPDATE menus SET name = @name WHERE id = @id`),
@@ -259,8 +257,8 @@ const stmts = {
   deleteMenu: db.prepare(`DELETE FROM menus WHERE id = ?`),
   deleteMenuSlots: db.prepare(`DELETE FROM menu_slots WHERE menu_id = ?`),
   insertMenuSlot: db.prepare(`
-    INSERT INTO menu_slots (menu_id, day_of_cycle, slot, eater, recipe_id, free_text)
-    VALUES (@menu_id, @day_of_cycle, @slot, @eater, @recipe_id, @free_text)
+    INSERT INTO menu_slots (menu_id, day_of_cycle, slot, recipe_id, free_text)
+    VALUES (@menu_id, @day_of_cycle, @slot, @recipe_id, @free_text)
   `),
 };
 
@@ -377,7 +375,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/config', (req, res) => {
-  res.json({ eaters: EATERS, slots: SLOTS, units: UNITS, unit_labels: UNIT_LABELS });
+  res.json({ slots: SLOTS, units: UNITS, unit_labels: UNIT_LABELS });
 });
 
 app.get('/api/recipes', (req, res) => {
@@ -489,7 +487,6 @@ app.patch('/api/recipes/:id/active', (req, res) => {
 // ── Planned meals ─────────────────────────────────────────────────────────
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const EATERS_SET = new Set(EATERS);
 const SLOTS_SET = new Set(SLOTS);
 
 function validateMealBody(body, { forCreate }) {
@@ -507,9 +504,9 @@ function validateMealBody(body, { forCreate }) {
     if (!SLOTS_SET.has(body.slot)) errors.push(`invalid slot: ${body.slot}`);
     else clean.slot = body.slot;
   }
-  if (forCreate || body.eater !== undefined) {
-    if (!EATERS_SET.has(body.eater)) errors.push(`invalid eater: ${body.eater}`);
-    else clean.eater = body.eater;
+  // Phase 8: reject any `eater` field — surfaces stale clients.
+  if (body.eater !== undefined) {
+    errors.push('eater field is no longer supported');
   }
 
   // Exactly one of recipe_id / free_text must be set for a new meal.
@@ -600,7 +597,6 @@ app.post('/api/planned-meals', (req, res) => {
     const result = stmts.insertPlannedMeal.run({
       date: clean.date,
       slot: clean.slot,
-      eater: clean.eater,
       recipe_id: clean.recipe_id,
       free_text: clean.free_text,
       status: clean.status,
@@ -611,7 +607,7 @@ app.post('/api/planned-meals', (req, res) => {
     res.status(201).json(hydrateMeal(row));
   } catch (err) {
     if (isUniqueCollision(err)) {
-      return res.status(409).json({ error: 'A meal already exists for that date, slot, and eater.' });
+      return res.status(409).json({ error: 'A meal already exists for that date and slot.' });
     }
     throw err;
   }
@@ -626,7 +622,6 @@ app.patch('/api/planned-meals/:id', (req, res) => {
     id,
     date: clean.date ?? null,
     slot: clean.slot ?? null,
-    eater: clean.eater ?? null,
     recipe_id: clean.recipe_id ?? null,
     free_text: clean.free_text ?? null,
     status: clean.status ?? null,
@@ -640,7 +635,7 @@ app.patch('/api/planned-meals/:id', (req, res) => {
     if (result.changes === 0) return res.status(404).json({ error: 'meal not found' });
   } catch (err) {
     if (isUniqueCollision(err)) {
-      return res.status(409).json({ error: 'A meal already exists for that date, slot, and eater.' });
+      return res.status(409).json({ error: 'A meal already exists for that date and slot.' });
     }
     throw err;
   }
@@ -694,8 +689,7 @@ app.post('/api/cooking-sessions', (req, res) => {
     if (!s || typeof s !== 'object') { errors.push(`serves[${i}]: invalid`); return; }
     if (typeof s.date !== 'string' || !DATE_RE.test(s.date)) { errors.push(`serves[${i}]: bad date`); return; }
     if (!SLOTS_SET.has(s.slot)) { errors.push(`serves[${i}]: bad slot`); return; }
-    if (!EATERS_SET.has(s.eater)) { errors.push(`serves[${i}]: bad eater`); return; }
-    cleanServes.push({ date: s.date, slot: s.slot, eater: s.eater });
+    cleanServes.push({ date: s.date, slot: s.slot });
   });
 
   const notes = body.notes == null ? null : String(body.notes).slice(0, 1000);
@@ -716,7 +710,6 @@ app.post('/api/cooking-sessions', (req, res) => {
       const r = stmts.insertPlannedMeal.run({
         date: s.date,
         slot: s.slot,
-        eater: s.eater,
         recipe_id,
         free_text,
         status: 'planned',
@@ -757,7 +750,7 @@ app.delete('/api/cooking-sessions/:id', (req, res) => {
 });
 
 // ── Menus (bi-weekly templates) ───────────────────────────────────────────
-// A menu is a named 14-day (day_of_cycle 0–13) grid of slot/eater cells.
+// A menu is a named 14-day (day_of_cycle 0–13) grid of slot cells.
 // Empty cells are allowed — they don't materialize on apply.
 
 const MAX_MENU_NAME = 200;
@@ -776,10 +769,6 @@ function validateMenuSlot(raw, i) {
   }
   if (!SLOTS_SET.has(raw.slot)) {
     errors.push(`slot ${i}: invalid slot "${raw.slot}"`);
-    return { errors };
-  }
-  if (!EATERS_SET.has(raw.eater)) {
-    errors.push(`slot ${i}: invalid eater "${raw.eater}"`);
     return { errors };
   }
   const hasRecipe = raw.recipe_id != null && raw.recipe_id !== '';
@@ -805,7 +794,6 @@ function validateMenuSlot(raw, i) {
     clean: {
       day_of_cycle: day,
       slot: raw.slot,
-      eater: raw.eater,
       recipe_id,
       free_text,
     },
@@ -895,7 +883,6 @@ app.put('/api/menus/:id/slots', (req, res) => {
         menu_id: id,
         day_of_cycle: s.day_of_cycle,
         slot: s.slot,
-        eater: s.eater,
         recipe_id: s.recipe_id,
         free_text: s.free_text,
       });
@@ -934,11 +921,10 @@ app.post('/api/menus/:id/apply', (req, res) => {
     return res.json({ applied: 0, skipped: 0, conflicts: [] });
   }
 
-  // Materialize: one (date, slot, eater) triple per filled slot.
+  // Materialize: one (date, slot) per filled slot.
   const materialized = filledSlots.map((s) => ({
     date: addDaysToIso(body.start_date, s.day_of_cycle),
     slot: s.slot,
-    eater: s.eater,
     recipe_id: s.recipe_id,
     free_text: s.free_text,
     recipe_title: s.recipe_title || null,
@@ -949,7 +935,7 @@ app.post('/api/menus/:id/apply', (req, res) => {
   const maxDate = materialized.reduce((a, m) => (a > m.date ? a : m.date), materialized[0].date);
   const existing = stmts.listPlannedMealsInRange.all({ start: minDate, end: maxDate });
   const existingByKey = new Map();
-  for (const p of existing) existingByKey.set(`${p.date}|${p.slot}|${p.eater}`, p);
+  for (const p of existing) existingByKey.set(`${p.date}|${p.slot}`, p);
 
   // Resolve incoming recipe titles once so the client doesn't need to fetch
   // the full library (including inactive recipes) to label conflict rows.
@@ -980,14 +966,14 @@ app.post('/api/menus/:id/apply', (req, res) => {
   const conflicts = [];
   let identitySkipped = 0;
   for (const m of materialized) {
-    const e = existingByKey.get(`${m.date}|${m.slot}|${m.eater}`);
+    const e = existingByKey.get(`${m.date}|${m.slot}`);
     if (!e) continue;
     if (isIdentity(e, m)) { identitySkipped++; continue; }
     const incoming = {
       ...m,
       recipe_title: m.recipe_id ? incomingTitleMap[m.recipe_id] || null : null,
     };
-    conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming });
+    conflicts.push({ date: m.date, slot: m.slot, existing: e, incoming });
   }
 
   if (conflicts.length && !onConflict) {
@@ -1002,7 +988,7 @@ app.post('/api/menus/:id/apply', (req, res) => {
     let skipped = identitySkipped;
     let orphanedSessions = 0;
     for (const m of materialized) {
-      const key = `${m.date}|${m.slot}|${m.eater}`;
+      const key = `${m.date}|${m.slot}`;
       const conflict = existingByKey.get(key);
       if (conflict) {
         if (isIdentity(conflict, m)) continue; // already counted as identity skip
@@ -1013,7 +999,6 @@ app.post('/api/menus/:id/apply', (req, res) => {
       stmts.insertPlannedMeal.run({
         date: m.date,
         slot: m.slot,
-        eater: m.eater,
         recipe_id: m.recipe_id,
         free_text: m.free_text,
         status: 'planned',
