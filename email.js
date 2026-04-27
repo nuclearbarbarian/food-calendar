@@ -62,11 +62,6 @@ function formatFriendlyDate(isoDate) {
   }).format(date);
 }
 
-// Phase 8 kept this exported for backward compat; no callers now.
-function groupByEater(meals) {
-  return { all: [...meals].sort((a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot)) };
-}
-
 function sortBySlot(meals) {
   return [...meals].sort((a, b) => SLOT_ORDER.indexOf(a.slot) - SLOT_ORDER.indexOf(b.slot));
 }
@@ -88,7 +83,7 @@ function buildDigestHtml({ date, meals }) {
 
   // Wrap ornament in a symbol-friendly font stack so Outlook Desktop doesn't
   // substitute a box or Wingdings glyph. Keeps the illuminated-manuscript vibe.
-  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.parke}; letter-spacing: 8px;`;
+  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.sakura}; letter-spacing: 8px;`;
   const ornament = `<span style="${ornamentStyle}">✿ ❀ ✵ ❧ ✦</span>`;
 
   // Table-based layout: Outlook for Windows ignores max-width on <div>.
@@ -307,7 +302,7 @@ function buildShoppingListHtml({ list, items }) {
       ? `${total} item${total === 1 ? '' : 's'}`
       : `${remaining} of ${total} remaining`;
 
-  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.parke}; letter-spacing: 8px;`;
+  const ornamentStyle = `font-family: 'Apple Symbols','Segoe UI Symbol','Symbola',Georgia,serif; color: ${COLORS.sakura}; letter-spacing: 8px;`;
   const ornament = `<span style="${ornamentStyle}">✿ ❀ ✵ ❧ ✦</span>`;
 
   return `<!DOCTYPE html>
@@ -384,11 +379,11 @@ module.exports = {
   buildDigestText,
   sendDigest,
   formatFriendlyDate,
-  groupByEater,
   countMeals,
   buildSubject,
   buildShoppingListHtml,
   buildShoppingListText,
   sendShoppingList,
   formatShoppingItem,
+  sortBySlot,
 };

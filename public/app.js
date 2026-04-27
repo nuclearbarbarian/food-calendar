@@ -670,9 +670,6 @@
 
   const SLOT_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
   const SLOT_ORDER = { breakfast: 0, lunch: 1, dinner: 2 };
-  // Phase 8 dropped the eater dimension. EATER_LABELS retained as empty
-  // map so any leftover refs return undefined (visible as empty strings).
-  const EATER_LABELS = {};
 
   const cal = {
     view: 'month',
@@ -714,6 +711,7 @@
     for (const btn of $$('.view-pill')) {
       btn.addEventListener('click', () => {
         const view = btn.dataset.view;
+        if (view !== 'month' && view !== 'week') return; // ignore stray attrs
         if (cal.view === view) return;
         cal.view = view;
         cal.selectedDate = null;

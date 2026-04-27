@@ -174,7 +174,12 @@ function openDb(dbPath) {
           ) WHERE rn > 1
         )
       `);
-      db.exec(`ALTER TABLE planned_meals DROP COLUMN eater`);
+      try {
+        db.exec(`ALTER TABLE planned_meals DROP COLUMN eater`);
+      } catch (err) {
+        console.warn('planned_meals.eater drop failed (SQLite < 3.35?):', err.message);
+        throw err; // bubble so the transaction rolls back cleanly
+      }
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_pair ON planned_meals(date, slot)`);
     });
     collapse();
@@ -198,7 +203,12 @@ function openDb(dbPath) {
           ) WHERE rn > 1
         )
       `);
-      db.exec(`ALTER TABLE menu_slots DROP COLUMN eater`);
+      try {
+        db.exec(`ALTER TABLE menu_slots DROP COLUMN eater`);
+      } catch (err) {
+        console.warn('menu_slots.eater drop failed (SQLite < 3.35?):', err.message);
+        throw err;
+      }
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_slots_unique ON menu_slots(menu_id, day_of_cycle, slot)`);
     });
     collapseMenu();

@@ -1,8 +1,5 @@
 'use strict';
 
-// Phase 8 dropped the eater dimension. EATERS is exported as an empty list
-// so anything that still imports it doesn't crash; new code shouldn't use it.
-const EATERS = [];
 const SLOTS = ['breakfast', 'lunch', 'dinner'];
 
 // Canonical unit list. Keep small and stable — shopping-list merging depends on
@@ -47,11 +44,6 @@ const UNIT_LABELS = {
   to_taste: 'to taste',
 };
 
-function isEater(_value) {
-  // Phase 8: eater dimension removed. Always returns false so any leftover
-  // server-side validator that calls this rejects an `eater` field if sent.
-  return false;
-}
 
 function isSlot(value) {
   return SLOTS.includes(value);
@@ -98,11 +90,9 @@ function escapeHtml(s) {
 }
 
 module.exports = {
-  EATERS,
   SLOTS,
   UNITS,
   UNIT_LABELS,
-  isEater,
   isSlot,
   isUnit,
   formatDate,
