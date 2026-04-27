@@ -91,13 +91,12 @@ const stmts = {
     ORDER BY sort_order, id
   `),
   insertRecipe: db.prepare(`
-    INSERT INTO recipes (title, slot_categories, tried, source, steps, notes, updated_at)
-    VALUES (@title, @slot_categories, @tried, @source, @steps, @notes, datetime('now'))
+    INSERT INTO recipes (title, tried, source, steps, notes, updated_at)
+    VALUES (@title, @tried, @source, @steps, @notes, datetime('now'))
   `),
   updateRecipe: db.prepare(`
     UPDATE recipes
     SET title = @title,
-        slot_categories = @slot_categories,
         tried = @tried,
         source = @source,
         steps = @steps,
@@ -371,10 +370,10 @@ function hydrateMeal(row) {
 
 // ── Endpoints ─────────────────────────────────────────────────────────────
 
+// Health probe is intentionally cheap and unauthenticated (Fly's health check
+// hits it). No DB read so it can't be DoS-amplified by an unauth attacker.
 app.get('/api/health', (req, res) => {
-  const active = db.prepare('SELECT COUNT(*) AS n FROM recipes WHERE active = 1').get().n;
-  const total = db.prepare('SELECT COUNT(*) AS n FROM recipes').get().n;
-  res.json({ ok: true, recipes: { active, total }, eaters: EATERS, slots: SLOTS });
+  res.json({ ok: true });
 });
 
 app.get('/api/config', (req, res) => {
@@ -407,7 +406,6 @@ app.post('/api/recipes', (req, res) => {
   const create = db.transaction(() => {
     const { lastInsertRowid } = stmts.insertRecipe.run({
       title: clean.title,
-      slot_categories: JSON.stringify(clean.slots), // legacy column, kept dual-written for one phase
       tried: clean.tried,
       source: clean.source,
       steps: clean.steps,
@@ -443,7 +441,6 @@ app.put('/api/recipes/:id', (req, res) => {
     const result = stmts.updateRecipe.run({
       id,
       title: clean.title,
-      slot_categories: JSON.stringify(clean.slots), // legacy column, kept dual-written for one phase
       tried: clean.tried,
       source: clean.source,
       steps: clean.steps,
@@ -568,6 +565,8 @@ function validateMealBody(body, { forCreate }) {
   return { errors, clean };
 }
 
+const MAX_PLANNED_MEALS_RANGE_DAYS = 90;
+
 app.get('/api/planned-meals', (req, res) => {
   const start = typeof req.query.start === 'string' ? req.query.start : '';
   const end = typeof req.query.end === 'string' ? req.query.end : '';
@@ -575,6 +574,16 @@ app.get('/api/planned-meals', (req, res) => {
     return res.status(400).json({ error: 'start and end must be YYYY-MM-DD' });
   }
   if (start > end) return res.status(400).json({ error: 'start must be <= end' });
+  // Cap range so a typo / bug can't request thousands of days at once.
+  // Calendar views need at most 6 weeks (42 days); 90 gives generous headroom.
+  const startDate = new Date(start + 'T00:00:00Z');
+  const endDate = new Date(end + 'T00:00:00Z');
+  const dayCount = Math.round((endDate - startDate) / 86400000) + 1;
+  if (dayCount > MAX_PLANNED_MEALS_RANGE_DAYS) {
+    return res.status(400).json({
+      error: `range too wide (${dayCount} days; max ${MAX_PLANNED_MEALS_RANGE_DAYS})`,
+    });
+  }
   const rows = stmts.listPlannedMealsInRange.all({ start, end });
   res.json(rows.map(hydrateMeal));
 });
@@ -956,16 +965,29 @@ app.post('/api/menus/:id/apply', (req, res) => {
     for (const r of rows) incomingTitleMap[r.id] = r.title;
   }
 
+  // Identity-equivalent cells (same recipe / same free_text) aren't real
+  // conflicts — silently skip them. Avoids "X → X" rows in the conflict UI.
+  function isIdentity(existing, incoming) {
+    if (incoming.recipe_id != null) {
+      return existing.recipe_id === incoming.recipe_id;
+    }
+    if (incoming.free_text != null) {
+      return (existing.free_text || '').trim() === incoming.free_text.trim();
+    }
+    return false;
+  }
+
   const conflicts = [];
+  let identitySkipped = 0;
   for (const m of materialized) {
     const e = existingByKey.get(`${m.date}|${m.slot}|${m.eater}`);
-    if (e) {
-      const incoming = {
-        ...m,
-        recipe_title: m.recipe_id ? incomingTitleMap[m.recipe_id] || null : null,
-      };
-      conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming });
-    }
+    if (!e) continue;
+    if (isIdentity(e, m)) { identitySkipped++; continue; }
+    const incoming = {
+      ...m,
+      recipe_title: m.recipe_id ? incomingTitleMap[m.recipe_id] || null : null,
+    };
+    conflicts.push({ date: m.date, slot: m.slot, eater: m.eater, existing: e, incoming });
   }
 
   if (conflicts.length && !onConflict) {
@@ -977,12 +999,15 @@ app.post('/api/menus/:id/apply', (req, res) => {
 
   const apply = db.transaction(() => {
     let applied = 0;
-    let skipped = 0;
+    let skipped = identitySkipped;
+    let orphanedSessions = 0;
     for (const m of materialized) {
       const key = `${m.date}|${m.slot}|${m.eater}`;
       const conflict = existingByKey.get(key);
       if (conflict) {
+        if (isIdentity(conflict, m)) continue; // already counted as identity skip
         if (onConflict === 'skip') { skipped++; continue; }
+        if (conflict.cooking_session_id != null) orphanedSessions++;
         stmts.deletePlannedMeal.run(conflict.id);
       }
       stmts.insertPlannedMeal.run({
@@ -997,11 +1022,21 @@ app.post('/api/menus/:id/apply', (req, res) => {
       });
       applied++;
     }
-    return { applied, skipped };
+    return { applied, skipped, orphanedSessions };
   });
 
   const result = apply();
-  res.json({ ok: true, ...result, conflicts: conflicts.length });
+  if (result.orphanedSessions > 0) {
+    console.warn(`menu apply unlinked ${result.orphanedSessions} planned_meal(s) from cooking_sessions`);
+  }
+  res.json({
+    ok: true,
+    applied: result.applied,
+    skipped: result.skipped,
+    conflicts: conflicts.length,
+    identity_skipped: identitySkipped,
+    orphaned_sessions: result.orphanedSessions,
+  });
 });
 
 // ── Shopping lists ────────────────────────────────────────────────────────

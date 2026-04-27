@@ -262,9 +262,23 @@ const UNIT_LABELS_INLINE = {
   to_taste: 'to taste',
 };
 
+// Render common cooking fractions as Unicode glyphs for readability.
+const FRACTION_GLYPHS_EMAIL = {
+  0.125: '⅛', 0.25: '¼', 0.375: '⅜', 0.5: '½',
+  0.625: '⅝', 0.75: '¾', 0.875: '⅞',
+};
+
 function formatQuantityForEmail(q) {
   if (q == null || q === 0) return '';
   const rounded = Math.round(q * 1000) / 1000;
+  const whole = Math.floor(rounded);
+  const fracPart = Math.round((rounded - whole) * 1000) / 1000;
+  let glyph = FRACTION_GLYPHS_EMAIL[fracPart];
+  if (!glyph) {
+    if (Math.abs(fracPart - 0.333) < 0.005 || Math.abs(fracPart - 0.334) < 0.005) glyph = '⅓';
+    else if (Math.abs(fracPart - 0.667) < 0.005 || Math.abs(fracPart - 0.666) < 0.005) glyph = '⅔';
+  }
+  if (glyph) return whole > 0 ? `${whole}${glyph}` : glyph;
   return String(rounded);
 }
 

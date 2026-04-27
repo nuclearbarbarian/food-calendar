@@ -223,8 +223,11 @@ function seed() {
   }
 
   const insertRecipe = db.prepare(`
-    INSERT INTO recipes (title, slot_categories, tried, steps)
-    VALUES (@title, @slot_categories, @tried, @steps)
+    INSERT INTO recipes (title, tried, steps)
+    VALUES (@title, @tried, @steps)
+  `);
+  const insertSlot = db.prepare(`
+    INSERT OR IGNORE INTO recipe_slots (recipe_id, slot) VALUES (?, ?)
   `);
   const insertIngredient = db.prepare(`
     INSERT INTO recipe_ingredients (recipe_id, name, quantity, unit, sort_order)
@@ -235,10 +238,10 @@ function seed() {
     for (const r of recipes) {
       const { lastInsertRowid } = insertRecipe.run({
         title: r.title,
-        slot_categories: JSON.stringify(r.slots),
         tried: r.tried,
         steps: r.steps,
       });
+      for (const slot of r.slots) insertSlot.run(lastInsertRowid, slot);
       r.ingredients.forEach((ing, i) => {
         insertIngredient.run({
           recipe_id: lastInsertRowid,

@@ -73,9 +73,32 @@
     return { ok: false };
   }
 
+  // Decimal — used to populate input fields so the user can edit the value.
   function formatQuantity(q) {
     if (q == null) return '';
     const rounded = Math.round(q * 1000) / 1000;
+    return String(rounded);
+  }
+
+  // Display variant — renders common cooking fractions as Unicode glyphs.
+  // Use ONLY in display contexts (recipe detail, shopping list, email),
+  // never to populate <input> values.
+  const FRACTION_GLYPHS = {
+    0.125: '⅛', 0.25: '¼', 0.375: '⅜', 0.5: '½',
+    0.625: '⅝', 0.75: '¾', 0.875: '⅞',
+  };
+
+  function formatQuantityDisplay(q) {
+    if (q == null) return '';
+    const rounded = Math.round(q * 1000) / 1000;
+    const whole = Math.floor(rounded);
+    const fracPart = Math.round((rounded - whole) * 1000) / 1000;
+    let glyph = FRACTION_GLYPHS[fracPart];
+    if (!glyph) {
+      if (Math.abs(fracPart - 0.333) < 0.005 || Math.abs(fracPart - 0.334) < 0.005) glyph = '⅓';
+      else if (Math.abs(fracPart - 0.667) < 0.005 || Math.abs(fracPart - 0.666) < 0.005) glyph = '⅔';
+    }
+    if (glyph) return whole > 0 ? `${whole}${glyph}` : glyph;
     return String(rounded);
   }
 
@@ -84,7 +107,7 @@
   }
 
   function formatIngredient(ing) {
-    const qty = formatQuantity(ing.quantity);
+    const qty = formatQuantityDisplay(ing.quantity);
     const unit = ing.unit || null;
     const unitLabel = unit ? state.config.unit_labels[unit] || unit : '';
     if (unit === 'to_taste' || unit === 'pinch' || unit === 'dash') {
@@ -317,7 +340,7 @@
       renderLibrary();
     } catch (err) {
       console.error('Tried toggle failed', err);
-      alert('Could not update tried status. Try again?');
+      alertDialog({ title: 'Couldn\'t update', body: 'Could not update tried status. Try again?' });
     }
   }
 
@@ -372,7 +395,7 @@
       showModal('detail-modal');
     } catch (err) {
       console.error('Open detail failed', err);
-      alert('Could not load recipe. Try again?');
+      alertDialog({ title: 'Couldn\'t load', body: 'Could not load recipe. Try again?' });
     }
   }
 
@@ -387,7 +410,12 @@
       if (!state.detail) return;
       const btn = $('detail-deactivate');
       if (btn.disabled) return;
-      if (!confirm('Deactivate this recipe? It will be hidden from the library but past planned meals will keep their reference.')) return;
+      if (!await confirmDialog({
+        title: 'Deactivate recipe?',
+        body: 'It will be hidden from the library but past planned meals will keep their reference.',
+        confirmLabel: 'Deactivate',
+        danger: true,
+      })) return;
       btn.disabled = true;
       try {
         await API.setActive(state.detail.id, false);
@@ -626,6 +654,20 @@
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
   }
 
+  // Format a SQLite UTC timestamp ("2026-04-26 17:04:32") in the user's local
+  // time. SQLite returns space-separated; convert to "T" and append "Z" so
+  // browsers parse as UTC. Falls back to the raw string if parsing fails.
+  function prettyTimestamp(sqlUtc) {
+    if (!sqlUtc) return '';
+    const iso = sqlUtc.replace(' ', 'T') + 'Z';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return sqlUtc;
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+  }
+
   const SLOT_LETTERS = { breakfast: 'B', lunch: 'L', dinner: 'D' };
   const SLOT_ORDER = { breakfast: 0, lunch: 1, dinner: 2 };
   const EATER_LABELS = { parke: 'Parke', emmet: 'Emmet', shared: 'Shared' };
@@ -635,7 +677,6 @@
     focusDate: isoToday(),
     meals: [],
     selectedDate: null,
-    loadedRange: { start: '', end: '' },
     today: isoToday(),
   };
 
@@ -646,7 +687,6 @@
     const res = await fetch(`/api/planned-meals?start=${start}&end=${end}`);
     if (!res.ok) throw new Error(`listMeals ${res.status}`);
     cal.meals = await res.json();
-    cal.loadedRange = { start, end };
   }
 
   function mealsOnDate(date) {
@@ -689,23 +729,27 @@
   async function handleSendDigest() {
     const btn = $('cal-send-digest');
     if (btn.disabled) return;
-    if (!confirm("Send today's menu to Parke's inbox now?")) return;
+    if (!await confirmDialog({
+      title: "Send today's menu?",
+      body: "Email Parke's inbox now.",
+      confirmLabel: 'Send',
+    })) return;
     btn.disabled = true;
     const originalLabel = btn.textContent;
     btn.textContent = 'Sending…';
     try {
       const result = await api('POST', '/api/send-digest?force=1');
       if (result.skipped) {
-        alert(`Already sent earlier today at ${result.sent_at} UTC.`);
+        await alertDialog({ title: 'Already sent', body: `The digest was sent earlier today at ${result.sent_at} UTC.` });
       } else {
-        alert(`Sent. ${result.meal_count} meals.\nSubject: ${result.subject}`);
+        await alertDialog({ title: 'Sent', body: `${result.meal_count} meals. Subject: ${result.subject}` });
       }
     } catch (err) {
       console.error('Send digest failed', err);
       const msg = err && err.data && err.data.error
         ? err.data.error
         : 'Could not send. Check the server logs.';
-      alert(`Send failed: ${msg}`);
+      await alertDialog({ title: 'Send failed', body: msg });
     } finally {
       btn.disabled = false;
       btn.textContent = originalLabel;
@@ -839,9 +883,12 @@
       {
         class: cls.join(' '),
         draggable: 'true',
+        tabindex: '0',
+        role: 'button',
+        'aria-label': `Edit ${EATER_LABELS[meal.eater]}'s ${meal.slot}: ${mealTitle(meal)}${meal.status === 'eaten' ? ' (eaten)' : ''}`,
         title: `${EATER_LABELS[meal.eater]} · ${meal.slot} · ${mealTitle(meal)}`,
       },
-      el('span', { class: 'slot-letter' }, SLOT_LETTERS[meal.slot]),
+      el('span', { class: 'slot-letter', 'aria-hidden': 'true' }, SLOT_LETTERS[meal.slot]),
       meal.cooking_session_id ? el('span', { class: 'session-glyph', 'aria-hidden': 'true' }, '🍳') : null,
       el('span', { class: 'chip-body' }, mealTitle(meal))
     );
@@ -854,6 +901,15 @@
       e.stopPropagation();
       if (draggedFlag) { draggedFlag = false; return; }
       openMealModal({ mode: 'edit', meal });
+    });
+    // Keyboard: Enter or Space opens the editor (drag stays mouse-only — drop
+    // targets aren't keyboard-reachable; the editor lets you change date).
+    chip.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        openMealModal({ mode: 'edit', meal });
+      }
     });
     chip.addEventListener('dragstart', (e) => {
       draggedFlag = true;
@@ -876,10 +932,13 @@
       await renderCalendar();
     } catch (err) {
       if (err.status === 409) {
-        alert('That day already has a meal for this slot and eater. Delete or move the existing one first.');
+        alertDialog({
+          title: 'Slot taken',
+          body: 'That day already has a meal for this slot and eater. Delete or move the existing one first.',
+        });
       } else {
         console.error('Reschedule failed', err);
-        alert('Could not move that meal. Try again?');
+        alertDialog({ title: 'Couldn\'t move', body: 'Could not move that meal. Try again?' });
       }
     }
   }
@@ -1038,7 +1097,7 @@
             await renderCalendar();
           } catch (err) {
             console.error(err);
-            alert('Could not update meal status.');
+            alertDialog({ title: 'Couldn\'t update', body: 'Could not update meal status.' });
           }
         },
       },
@@ -1228,9 +1287,15 @@
     btn.disabled = true;
     try {
       if (mealModalState.deleteHandler) {
-        if (!confirm(mealModalState.context === 'menu'
-          ? 'Clear this slot from the menu?'
-          : 'Delete this meal?')) { btn.disabled = false; return; }
+        const ok = await confirmDialog({
+          title: mealModalState.context === 'menu' ? 'Clear this slot?' : 'Delete this meal?',
+          body: mealModalState.context === 'menu'
+            ? 'The slot will be empty in the menu template. Already-applied meals on the calendar are unaffected.'
+            : 'The meal is removed from the calendar.',
+          confirmLabel: mealModalState.context === 'menu' ? 'Clear' : 'Delete',
+          danger: true,
+        });
+        if (!ok) { btn.disabled = false; return; }
         await mealModalState.deleteHandler({
           slot: mealModalState.slot,
           eater: mealModalState.eater,
@@ -1239,7 +1304,13 @@
         hideModal('meal-modal');
         return;
       }
-      if (!confirm('Delete this meal from the calendar?')) { btn.disabled = false; return; }
+      const ok = await confirmDialog({
+        title: 'Delete this meal?',
+        body: 'The meal is removed from the calendar.',
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) { btn.disabled = false; return; }
       await api('DELETE', `/api/planned-meals/${mealModalState.mealId}`);
       hideModal('meal-modal');
       await renderCalendar();
@@ -1483,7 +1554,7 @@
       try {
         await api('PATCH', `/api/shopping-lists/${list.id}`, { name });
         list.name = name;
-      } catch (err) { alert('Rename failed.'); nameInput.value = list.name; }
+      } catch (err) { alertDialog({ title: 'Rename failed', body: 'Could not save the new name.' }); nameInput.value = list.name; }
     });
 
     const actions = el(
@@ -1522,7 +1593,7 @@
     if (total === 0) metaBits.push('No items');
     else if (total === remaining) metaBits.push(`${total} item${total === 1 ? '' : 's'}`);
     else metaBits.push(`${remaining} of ${total} remaining`);
-    if (list.emailed_at) metaBits.push(`Last emailed ${list.emailed_at} UTC`);
+    if (list.emailed_at) metaBits.push(`Last emailed ${prettyTimestamp(list.emailed_at)}`);
     wrap.appendChild(el('div', { class: 'detail-meta-row' }, metaBits.join(' · ')));
 
     const itemList = el('div', { class: 'item-list' });
@@ -1569,7 +1640,7 @@
             row.classList.toggle('checked', isChecked);
             checkBtn.classList.toggle('checked', isChecked);
             checkBtn.textContent = isChecked ? '✓' : '';
-            alert('Could not toggle.');
+            alertDialog({ title: 'Couldn\'t toggle', body: 'Could not update item.' });
           }
         },
       },
@@ -1670,39 +1741,53 @@
   let emailSendInFlight = false;
   async function handleEmailList(id) {
     if (emailSendInFlight) return;
-    if (!confirm("Email this list to Parke's inbox?")) return;
+    if (!await confirmDialog({
+      title: 'Email this list?',
+      body: "Send to Parke's inbox.",
+      confirmLabel: 'Send',
+    })) return;
     emailSendInFlight = true;
     try {
       const result = await api('POST', `/api/shopping-lists/${id}/email`);
-      alert(`Sent. Resend id: ${result.resend_id || 'n/a'}`);
+      await alertDialog({ title: 'Sent', body: `Resend id: ${result.resend_id || 'n/a'}` });
       await openListDetail(id);
     } catch (err) {
-      alert('Email failed: ' + (err.data && err.data.error ? err.data.error : 'unknown'));
+      await alertDialog({ title: 'Email failed', body: (err.data && err.data.error) || 'unknown error' });
     } finally {
       emailSendInFlight = false;
     }
   }
 
   async function handleRemoveChecked(id) {
-    if (!confirm('Remove all checked items from this list?')) return;
+    if (!await confirmDialog({
+      title: 'Remove checked items?',
+      body: 'They\'ll be deleted from the list.',
+      confirmLabel: 'Remove',
+      danger: true,
+    })) return;
     try {
       const result = await api('POST', `/api/shopping-lists/${id}/remove-checked`);
       if (result.removed === 0) {
-        alert('No checked items to remove.');
+        await alertDialog({ title: 'Nothing to remove', body: 'No checked items on this list.' });
         return;
       }
       await openListDetail(id);
-    } catch (err) { alert('Remove failed.'); }
+    } catch (err) { alertDialog({ title: 'Remove failed', body: 'Try again.' }); }
   }
 
   async function handleDeleteList(id) {
-    if (!confirm('Delete this shopping list? This cannot be undone.')) return;
+    if (!await confirmDialog({
+      title: 'Delete this shopping list?',
+      body: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    })) return;
     try {
       await api('DELETE', `/api/shopping-lists/${id}`);
       closeListDetail();
       await loadShoppingLists();
       renderShoppingPanel();
-    } catch (err) { alert('Delete failed.'); }
+    } catch (err) { alertDialog({ title: 'Delete failed', body: 'Try again.' }); }
   }
 
   // ── List builder modal ───────────────────────────────────────────────────
@@ -1927,429 +2012,6 @@
     box.hidden = false;
   }
 
-  // ── Menus (bi-weekly) ────────────────────────────────────────────────────
-
-  const MENU_DAY_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-  const menus = {
-    list: [],
-    editing: null,   // full menu with slots
-    activeDay: 0,
-    dirty: false,
-    applyConflicts: null,
-    applyStartDate: null,
-  };
-
-  function menuDayLabel(day) {
-    const week = day < 7 ? 1 : 2;
-    const weekday = MENU_DAY_WEEKDAYS[day % 7];
-    return `Week ${week} ${weekday}`;
-  }
-
-  async function loadMenus() {
-    menus.list = await api('GET', '/api/menus');
-  }
-
-  function renderMenusPanel() {
-    const listWrap = $('menus-list');
-    const editorWrap = $('menu-editor');
-    if (menus.editing) {
-      listWrap.hidden = true;
-      editorWrap.hidden = false;
-      renderMenuEditor();
-      return;
-    }
-    listWrap.hidden = false;
-    editorWrap.hidden = true;
-    listWrap.innerHTML = '';
-    if (menus.list.length === 0) {
-      listWrap.appendChild(
-        el(
-          'div',
-          { class: 'empty-state' },
-          el('div', { class: 'empty-state-ornament', 'aria-hidden': 'true' }, '✿ ❀ ✵ ❧ ✦'),
-          el('div', { class: 'empty-state-text' }, 'No menus yet.'),
-          el('div', { class: 'empty-state-sub' }, 'Create a 14-day menu template, then apply it to the calendar.')
-        )
-      );
-      return;
-    }
-    for (const menu of menus.list) {
-      listWrap.appendChild(renderMenuCard(menu));
-    }
-  }
-
-  function renderMenuCard(menu) {
-    const cls = `menu-card${menu.active ? '' : ' inactive'}`;
-    const fills = menu.filled_slot_count;
-    const fillLabel = fills === 0
-      ? 'Empty'
-      : `${fills} slot${fills === 1 ? '' : 's'} filled`;
-    return el(
-      'article',
-      { class: cls, onclick: () => openMenuEditor(menu.id) },
-      el('h3', { class: 'menu-card-name' }, menu.name),
-      el(
-        'div',
-        { class: 'menu-card-meta' },
-        fillLabel + (menu.active ? '' : ' · deactivated')
-      )
-    );
-  }
-
-  async function openMenuEditor(id) {
-    const full = await api('GET', `/api/menus/${id}`);
-    menus.editing = full;
-    menus.activeDay = 0;
-    menus.dirty = false;
-    renderMenusPanel();
-  }
-
-  async function closeMenuEditor() {
-    if (menus.dirty) {
-      if (!confirm('You have unsaved changes. Discard them?')) return;
-    }
-    menus.editing = null;
-    menus.dirty = false;
-    await loadMenus();
-    renderMenusPanel();
-  }
-
-  function renderMenuEditor() {
-    const wrap = $('menu-editor');
-    wrap.innerHTML = '';
-    const menu = menus.editing;
-    if (!menu) return;
-
-    const nameInput = el('input', {
-      type: 'text',
-      class: 'detail-name-input',
-      value: menu.name,
-      maxlength: 200,
-    });
-    nameInput.addEventListener('change', async () => {
-      const name = nameInput.value.trim();
-      if (!name || name === menu.name) { nameInput.value = menu.name; return; }
-      try {
-        await api('PATCH', `/api/menus/${menu.id}`, { name });
-        menu.name = name;
-      } catch (err) { alert('Rename failed.'); nameInput.value = menu.name; }
-    });
-
-    const header = el(
-      'header',
-      { class: 'menu-editor-header' },
-      nameInput,
-      el(
-        'div',
-        { class: 'detail-actions' },
-        el(
-          'button',
-          { class: 'btn-primary', onclick: () => openApplyModal() },
-          'Apply to calendar'
-        ),
-        el(
-          'button',
-          {
-            class: 'btn-ghost',
-            onclick: async () => {
-              const next = !menu.active;
-              await api('PATCH', `/api/menus/${menu.id}`, { active: next ? 1 : 0 });
-              menu.active = next;
-              renderMenuEditor();
-            },
-          },
-          menu.active ? 'Deactivate' : 'Reactivate'
-        ),
-        el(
-          'button',
-          { class: 'btn-ghost btn-danger', onclick: () => handleDeleteMenu(menu.id) },
-          'Delete'
-        ),
-        el(
-          'button',
-          { class: 'btn-ghost', onclick: closeMenuEditor },
-          '← Back'
-        )
-      )
-    );
-    wrap.appendChild(header);
-
-    const body = el('div', { class: 'menu-editor-body' });
-    body.appendChild(renderMenuDayStrip());
-    body.appendChild(renderMenuDayPanel());
-    wrap.appendChild(body);
-  }
-
-  function renderMenuDayStrip() {
-    const strip = el('div', { class: 'menu-day-strip' });
-    for (const week of [0, 1]) {
-      const group = el('div', { class: 'menu-week-group' });
-      group.appendChild(el('div', { class: 'menu-week-label' }, `Week ${week + 1}`));
-      for (let i = 0; i < 7; i++) {
-        const day = week * 7 + i;
-        const count = menus.editing.slots.filter((s) => s.day_of_cycle === day).length;
-        const active = day === menus.activeDay;
-        const btn = el(
-          'button',
-          {
-            class: `menu-day-btn${active ? ' active' : ''}${count > 0 ? ' has-meals' : ''}`,
-            onclick: () => { menus.activeDay = day; renderMenuEditor(); },
-          },
-          el(
-            'span',
-            {},
-            el('div', { class: 'day-weekday' }, MENU_DAY_WEEKDAYS[i]),
-            el('div', { class: 'day-index' }, `Day ${day + 1}`)
-          ),
-          el('span', {}, ''),
-          el('span', { class: 'day-count' }, count > 0 ? String(count) : '')
-        );
-        group.appendChild(btn);
-      }
-      strip.appendChild(group);
-    }
-    return strip;
-  }
-
-  function renderMenuDayPanel() {
-    const panel = el('div', { class: 'menu-day-panel' });
-    panel.appendChild(
-      el('h3', { class: 'menu-day-title' }, menuDayLabel(menus.activeDay))
-    );
-    const slotsForDay = menus.editing.slots.filter((s) => s.day_of_cycle === menus.activeDay);
-
-    for (const slot of ['breakfast', 'lunch', 'dinner']) {
-      const group = el(
-        'div',
-        { class: 'slot-group' },
-        el('div', { class: 'slot-group-title' }, slot[0].toUpperCase() + slot.slice(1))
-      );
-      for (const eater of ['parke', 'emmet', 'shared']) {
-        const found = slotsForDay.find((s) => s.slot === slot && s.eater === eater);
-        const label = el('span', { class: `eater-label eater-${eater}-label` }, EATER_LABELS[eater]);
-        const content = el('div', { class: 'eater-slot-content' });
-        if (found) {
-          const title = found.recipe_id
-            ? (found.recipe_title || `recipe #${found.recipe_id}`)
-            : found.free_text || '(untitled)';
-          content.appendChild(
-            el(
-              'div',
-              {
-                class: 'meal-summary',
-                onclick: () => openMenuSlotPicker(slot, eater, found),
-              },
-              el('span', { class: 'meal-summary-title' }, title)
-            )
-          );
-        } else {
-          content.appendChild(
-            el(
-              'button',
-              {
-                class: 'add-meal-btn',
-                onclick: () => openMenuSlotPicker(slot, eater, null),
-              },
-              '+ add'
-            )
-          );
-        }
-        group.appendChild(
-          el('div', { class: 'eater-row' }, label, content, el('span', {}))
-        );
-      }
-      panel.appendChild(group);
-    }
-    return panel;
-  }
-
-  function openMenuSlotPicker(slot, eater, existing) {
-    const menu = menus.editing;
-    const day = menus.activeDay;
-    const dayLabel = menuDayLabel(day);
-    const meal = existing ? {
-      slot,
-      eater,
-      recipe_id: existing.recipe_id,
-      free_text: existing.free_text,
-      status: 'planned',
-    } : null;
-
-    openMealModal({
-      mode: existing ? 'edit' : 'create',
-      date: null,       // no ISO date in menu context — menu slots are template-level
-      dateLabel: dayLabel,
-      slot,
-      eater,
-      meal,
-      context: 'menu',
-      hideNotes: true,
-      title: existing ? 'Edit menu slot' : 'Fill menu slot',
-      saveHandler: async ({ slot, eater, recipeId, freeText }) => {
-        // Replace the matching slot in-memory then persist all.
-        menu.slots = menu.slots.filter(
-          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
-        );
-        menu.slots.push({
-          day_of_cycle: day,
-          slot,
-          eater,
-          recipe_id: recipeId || null,
-          free_text: freeText || null,
-          recipe_title: recipeId ? (existing && existing.recipe_id === recipeId ? existing.recipe_title : null) : null,
-        });
-        await persistMenuSlots();
-      },
-      deleteHandler: async ({ slot, eater }) => {
-        menu.slots = menu.slots.filter(
-          (s) => !(s.day_of_cycle === day && s.slot === slot && s.eater === eater)
-        );
-        await persistMenuSlots();
-      },
-    });
-  }
-
-  async function persistMenuSlots() {
-    const menu = menus.editing;
-    const payload = menu.slots.map((s) => ({
-      day_of_cycle: s.day_of_cycle,
-      slot: s.slot,
-      eater: s.eater,
-      recipe_id: s.recipe_id,
-      free_text: s.free_text,
-    }));
-    try {
-      await api('PUT', `/api/menus/${menu.id}/slots`, { slots: payload });
-      // Refetch — server JOINs recipes so each slot comes back with its title.
-      // No separate library fetch needed.
-      const full = await api('GET', `/api/menus/${menu.id}`);
-      menu.slots = full.slots;
-      menus.dirty = false;
-      renderMenuEditor();
-    } catch (err) {
-      alert('Menu save failed: ' + (err.data && err.data.errors ? err.data.errors.join(', ') : 'unknown'));
-    }
-  }
-
-  async function handleDeleteMenu(id) {
-    if (!confirm('Delete this menu? The menu template is removed. Any meals already materialized from it stay on the calendar.')) return;
-    await api('DELETE', `/api/menus/${id}`);
-    menus.editing = null;
-    await loadMenus();
-    renderMenusPanel();
-  }
-
-  async function handleNewMenu() {
-    const name = prompt('Name your menu:', 'Untitled menu');
-    if (name == null) return;
-    const trimmed = name.trim() || 'Untitled menu';
-    const menu = await api('POST', '/api/menus', { name: trimmed });
-    menus.editing = { ...menu, slots: [] };
-    menus.activeDay = 0;
-    renderMenusPanel();
-  }
-
-  // ── Apply menu flow ──────────────────────────────────────────────────────
-
-  function openApplyModal() {
-    menus.applyConflicts = null;
-    menus.applyStartDate = null;
-    $('apply-start-date').value = isoToday();
-    $('apply-errors').hidden = true;
-    $('apply-errors').textContent = '';
-    $('apply-conflicts').hidden = true;
-    $('apply-confirm-btn').hidden = false;
-    $('apply-overwrite-btn').hidden = true;
-    $('apply-skip-btn').hidden = true;
-    showModal('menu-apply-modal');
-  }
-
-  async function handleApplyMenu(onConflict) {
-    const menu = menus.editing;
-    const start = $('apply-start-date').value;
-    if (!start) {
-      $('apply-errors').textContent = 'Pick a start date.';
-      $('apply-errors').hidden = false;
-      return;
-    }
-    $('apply-errors').hidden = true;
-    const body = { start_date: start };
-    if (onConflict) body.on_conflict = onConflict;
-    try {
-      const result = await api('POST', `/api/menus/${menu.id}/apply`, body);
-      hideModal('menu-apply-modal');
-      if (result.applied === 0 && result.skipped === 0) {
-        alert("This menu has no filled slots yet. Add meals to the day grid, then apply.");
-      } else {
-        const skippedNote = result.skipped ? ` (${result.skipped} skipped)` : '';
-        alert(`Applied ${result.applied} meal${result.applied === 1 ? '' : 's'}${skippedNote}.`);
-      }
-      // If the calendar was previously rendered, refresh it so the newly
-      // materialized meals show up without requiring a tab-switch-and-back.
-      if (calendarRendered) {
-        renderCalendar().catch((e) => console.error('Calendar refresh failed:', e));
-      }
-    } catch (err) {
-      if (err.status === 409 && err.data && Array.isArray(err.data.conflicts)) {
-        renderApplyConflicts(err.data.conflicts);
-        return;
-      }
-      $('apply-errors').textContent = (err.data && err.data.error) || 'Apply failed.';
-      $('apply-errors').hidden = false;
-    }
-  }
-
-  function renderApplyConflicts(conflicts) {
-    $('apply-conflicts').hidden = false;
-    const word = conflicts.length === 1 ? 'conflict' : 'conflicts';
-    $('conflict-intro').textContent = `${conflicts.length} ${word} with existing meals. Pick how to resolve:`;
-    const list = $('conflict-list');
-    list.innerHTML = '';
-    for (const c of conflicts.slice(0, 50)) {
-      const existingTitle = c.existing.recipe_title || c.existing.free_text || '(untitled)';
-      // Server attaches recipe_title to c.incoming so deactivated recipes
-      // and recipes outside state.recipes still show their name.
-      const incomingTitle = c.incoming.recipe_id
-        ? (c.incoming.recipe_title || `recipe ${c.incoming.recipe_id}`)
-        : (c.incoming.free_text || '(empty)');
-      list.appendChild(
-        el(
-          'li',
-          {},
-          el('span', { class: 'conflict-row-date' }, c.date),
-          el('span', { class: 'conflict-row-detail' },
-            ` · ${EATER_LABELS[c.eater]} ${c.slot} — `),
-          el('span', {}, existingTitle),
-          el('span', { class: 'conflict-arrow' }, '→'),
-          el('span', {}, incomingTitle)
-        )
-      );
-    }
-    if (conflicts.length > 50) {
-      list.appendChild(el('li', {}, `…and ${conflicts.length - 50} more`));
-    }
-    $('apply-confirm-btn').hidden = true;
-    $('apply-overwrite-btn').hidden = false;
-    $('apply-skip-btn').hidden = false;
-  }
-
-  function initApplyModal() {
-    $('apply-confirm-btn').addEventListener('click', () => handleApplyMenu(null));
-    $('apply-skip-btn').addEventListener('click', () => handleApplyMenu('skip'));
-    $('apply-overwrite-btn').addEventListener('click', () => {
-      // Final confirm with count before nuclear action.
-      const count = $('conflict-list').childElementCount;
-      if (!confirm(`This will replace ${count} existing meal${count === 1 ? '' : 's'}. Continue?`)) return;
-      handleApplyMenu('overwrite');
-    });
-  }
-
-  function initMenusPanel() {
-    $('new-menu-btn').addEventListener('click', handleNewMenu);
-    initApplyModal();
-  }
-
   // ── Menus (bi-weekly templates) ──────────────────────────────────────────
 
   // Day labels: Week 1 / Week 2, weekday-anchored Mon → Sun (day_of_cycle 0..13).
@@ -2442,7 +2104,7 @@
       try {
         await api('PATCH', `/api/menus/${menu.id}`, { name });
         menu.name = name;
-      } catch (err) { alert('Rename failed.'); nameInput.value = menu.name; }
+      } catch (err) { alertDialog({ title: 'Rename failed', body: 'Could not save the new name.' }); nameInput.value = menu.name; }
     });
 
     const actions = el(
@@ -2646,16 +2308,36 @@
   }
 
   async function handleDeleteMenu(id) {
-    if (!confirm('Delete this menu? This cannot be undone. Already-applied meals on the calendar are not affected.')) return;
+    if (!await confirmDialog({
+      title: 'Delete this menu?',
+      body: 'The template is removed. Meals already materialized from it stay on the calendar.',
+      confirmLabel: 'Delete',
+      danger: true,
+    })) return;
     await api('DELETE', `/api/menus/${id}`);
     closeMenuEditor();
     await loadMenus();
     renderMenusPanel();
   }
 
+  function defaultMenuName() {
+    const today = isoToday();
+    const [y, m, d] = today.split('-').map(Number);
+    const friendly = new Intl.DateTimeFormat('en-US', {
+      month: 'short', day: 'numeric', timeZone: 'UTC',
+    }).format(new Date(Date.UTC(y, m - 1, d)));
+    return `Menu — ${friendly}`;
+  }
+
   function initMenusPanel() {
     $('new-menu-btn').addEventListener('click', async () => {
-      const name = prompt('Menu name?', `Menu — ${isoToday().slice(0, 7)}`);
+      const name = await promptDialog({
+        title: 'New menu',
+        label: 'Menu name',
+        defaultValue: defaultMenuName(),
+        placeholder: 'Spring rotation, week-of meals, etc.',
+        confirmLabel: 'Create',
+      });
       if (!name || !name.trim()) return;
       const created = await api('POST', '/api/menus', { name: name.trim() });
       menuState.active = { ...created, slots: [] };
@@ -2697,7 +2379,12 @@
     }
 
     if (onConflict === 'overwrite') {
-      if (!confirm(`This will replace ${applyConflictCount} existing meal${applyConflictCount === 1 ? '' : 's'} on the calendar. Continue?`)) {
+      if (!await confirmDialog({
+        title: 'Overwrite existing meals?',
+        body: `This will replace ${applyConflictCount} existing meal${applyConflictCount === 1 ? '' : 's'} on the calendar.`,
+        confirmLabel: 'Overwrite',
+        danger: true,
+      })) {
         return;
       }
     }
@@ -2714,7 +2401,14 @@
       const result = await api('POST', `/api/menus/${applyTargetMenuId}/apply`, body);
       hideModal('menu-apply-modal');
       const skippedNote = result.skipped > 0 ? ` (skipped ${result.skipped} due to conflicts)` : '';
-      alert(`Applied ${result.applied} meal${result.applied === 1 ? '' : 's'} starting ${startDate}.${skippedNote}`);
+      const title = result.applied === 0 ? 'Nothing to apply' : 'Menu applied';
+      const identityNote = result.identity_skipped > 0
+        ? ` ${result.identity_skipped} cell${result.identity_skipped === 1 ? '' : 's'} already matched.`
+        : '';
+      await alertDialog({
+        title,
+        body: `${result.applied} meal${result.applied === 1 ? '' : 's'} added starting ${startDate}.${skippedNote}${identityNote}`,
+      });
     } catch (err) {
       if (err.status === 409 && err.data && err.data.conflicts) {
         renderApplyConflicts(err.data.conflicts);
@@ -2757,14 +2451,209 @@
     $('apply-skip-btn').hidden = false;
   }
 
+  // ── Dialog primitives ────────────────────────────────────────────────────
+  // Replacements for native alert / confirm / prompt that match the
+  // illuminated-manuscript aesthetic. Promise-based; callers await them.
+  // Markup is created dynamically and removed on close — no index.html
+  // changes needed. Focus is trapped inside while open and restored on close.
+
+  function trapFocus(panel) {
+    const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function focusable() {
+      return Array.from(panel.querySelectorAll(selector)).filter((n) => !n.disabled && n.offsetParent !== null);
+    }
+    function onKey(e) {
+      if (e.key !== 'Tab') return;
+      const list = focusable();
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    panel.addEventListener('keydown', onKey);
+    return () => panel.removeEventListener('keydown', onKey);
+  }
+
+  // Generic dialog. buttons: [{label, value, primary?, danger?, autofocus?}]
+  function dialog({ title, body, buttons }) {
+    return new Promise((resolve) => {
+      const previouslyFocused = document.activeElement;
+      const root = el('div', { class: 'modal' });
+      const backdrop = el('div', { class: 'modal-backdrop' });
+      const panel = el('div', {
+        class: 'modal-panel ui-dialog-panel',
+        role: 'dialog',
+        'aria-modal': 'true',
+      });
+      const titleEl = title
+        ? el('header', { class: 'modal-header' },
+            el('h2', { class: 'modal-title' }, title))
+        : null;
+      const bodyEl = el(
+        'div',
+        { class: 'modal-body ui-dialog-body' },
+        typeof body === 'string' ? el('p', {}, body) : body
+      );
+      const footer = el('footer', { class: 'modal-footer' });
+      const buttonNodes = [];
+      buttons.forEach((b, i) => {
+        const cls = ['btn-ghost'];
+        if (b.primary) cls[0] = 'btn-primary';
+        if (b.danger) cls.push('btn-danger');
+        if (i === buttons.length - 1 && buttons.length > 1) cls.push('footer-end');
+        const node = el(
+          'button',
+          {
+            type: 'button',
+            class: cls.join(' '),
+            onclick: () => close(b.value),
+          },
+          b.label
+        );
+        buttonNodes.push({ node, def: b });
+        footer.appendChild(node);
+      });
+
+      if (titleEl) panel.appendChild(titleEl);
+      panel.appendChild(bodyEl);
+      panel.appendChild(footer);
+      root.appendChild(backdrop);
+      root.appendChild(panel);
+      document.body.appendChild(root);
+      document.body.classList.add('modal-open');
+
+      const releaseTrap = trapFocus(panel);
+
+      function close(value) {
+        releaseTrap();
+        root.remove();
+        if ($$('.modal:not([hidden])').length === 0) {
+          document.body.classList.remove('modal-open');
+        }
+        document.removeEventListener('keydown', onEscape, { capture: true });
+        if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+          previouslyFocused.focus();
+        }
+        resolve(value);
+      }
+
+      function onEscape(e) {
+        if (e.key !== 'Escape') return;
+        // Stop propagation so the global modal-Escape handler doesn't also
+        // dismiss an underlying modal when this is a stacked dialog.
+        e.stopPropagation();
+        const cancelBtn = buttons.find((b) => b.value === false || b.value === null);
+        close(cancelBtn ? cancelBtn.value : null);
+      }
+      document.addEventListener('keydown', onEscape, { capture: true });
+      backdrop.addEventListener('click', () => close(buttons.find((b) => !b.primary) ? (buttons.find((b) => !b.primary)).value : null));
+
+      // Initial focus: prefer autofocus, else first input, else primary, else first button.
+      setTimeout(() => {
+        const auto = buttonNodes.find((b) => b.def.autofocus);
+        const inputs = panel.querySelectorAll('input, textarea, select');
+        if (inputs.length > 0) inputs[0].focus();
+        else if (auto) auto.node.focus();
+        else {
+          const primary = buttonNodes.find((b) => b.def.primary);
+          (primary || buttonNodes[0]).node.focus();
+        }
+      }, 0);
+    });
+  }
+
+  function confirmDialog({ title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false }) {
+    return dialog({
+      title,
+      body,
+      buttons: [
+        { label: cancelLabel, value: false },
+        { label: confirmLabel, value: true, primary: !danger, danger },
+      ],
+    });
+  }
+
+  function alertDialog({ title, body, okLabel = 'OK' }) {
+    return dialog({
+      title,
+      body,
+      buttons: [{ label: okLabel, value: true, primary: true }],
+    });
+  }
+
+  function promptDialog({ title, label, defaultValue = '', placeholder = '', maxlength = 200, confirmLabel = 'Save', cancelLabel = 'Cancel' }) {
+    const input = el('input', {
+      type: 'text',
+      maxlength,
+      placeholder,
+      value: defaultValue,
+      class: 'ui-dialog-input',
+    });
+    // Enter inside the input submits — keyboard users expect this.
+    let submittedViaEnter = false;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submittedViaEnter = true;
+        // Find the primary button in the dialog and click it.
+        const panel = input.closest('.modal-panel');
+        const submitBtn = panel && panel.querySelector('.modal-footer .btn-primary');
+        if (submitBtn) submitBtn.click();
+      }
+    });
+    const bodyNode = el('div', {},
+      label ? el('label', { class: 'form-label' }, label) : null,
+      input
+    );
+    return dialog({
+      title,
+      body: bodyNode,
+      buttons: [
+        { label: cancelLabel, value: null },
+        { label: confirmLabel, value: 'SUBMIT', primary: true },
+      ],
+    }).then((v) => (v === 'SUBMIT' ? input.value.trim() : null));
+  }
+
   // ── Modal controller ─────────────────────────────────────────────────────
 
+  // Track focus trap teardown + previously-focused element per modal so we can
+  // release on hide and restore focus.
+  const modalFocusState = {};
+
   function showModal(id) {
-    $(id).hidden = false;
+    const modal = $(id);
+    modal.hidden = false;
     document.body.classList.add('modal-open');
+    const panel = modal.querySelector('.modal-panel');
+    if (panel) {
+      modalFocusState[id] = {
+        previouslyFocused: document.activeElement,
+        release: trapFocus(panel),
+      };
+      // Initial focus: first input/textarea/select, else first button.
+      setTimeout(() => {
+        const first = panel.querySelector('input, textarea, select, button');
+        if (first) first.focus();
+      }, 0);
+    }
   }
   function hideModal(id) {
     $(id).hidden = true;
+    const state = modalFocusState[id];
+    if (state) {
+      state.release();
+      if (state.previouslyFocused && typeof state.previouslyFocused.focus === 'function') {
+        state.previouslyFocused.focus();
+      }
+      delete modalFocusState[id];
+    }
     if ($$('.modal:not([hidden])').length === 0) {
       document.body.classList.remove('modal-open');
     }

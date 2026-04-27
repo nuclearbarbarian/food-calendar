@@ -50,7 +50,17 @@ Resolve `~` to `$HOME`. Quote when invoking shell commands so spaces don't split
 
 ### 1. Verify the photo
 
-Read the image at the given path. If it doesn't exist, report and stop. If multiple paths were supplied, report that the skill takes one photo at a time and stop.
+Try to read the image at the given path with the Read tool. If it doesn't exist, report and stop. If multiple paths were clearly supplied, report that the skill takes one photo at a time and stop.
+
+**HEIC handling:** iPhones default to HEIC (`.heic` / `.HEIC`). The Read tool can sometimes process them and sometimes errors out depending on the Claude Code version. If Read fails on a HEIC, suggest the macOS one-liner:
+
+```bash
+sips -s format jpeg "<path>.heic" --out "<path>.jpg"
+```
+
+Then re-run the skill on the resulting `.jpg`. (Don't auto-execute `sips` — let the user run it so they choose where the converted file lives.)
+
+If Read fails on any other format, ask the user to paste the photo into the chat directly or convert to JPEG/PNG manually.
 
 ### 2. Extract the recipe
 

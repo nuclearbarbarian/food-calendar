@@ -7,7 +7,6 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS recipes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
-  slot_categories TEXT NOT NULL DEFAULT '[]',
   tried INTEGER NOT NULL DEFAULT 0 CHECK (tried IN (0, 1)),
   source TEXT,
   photo_path TEXT,
@@ -152,27 +151,47 @@ function openDb(dbPath) {
   } catch (_) { /* column exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_planned_meals_session ON planned_meals(cooking_session_id)`);
 
-  // Backfill recipe_slots from the legacy slot_categories JSON column.
-  // Idempotent: skipped on any recipe whose slots are already in the join table.
-  const backfill = db.transaction(() => {
-    const rows = db.prepare(`
-      SELECT r.id, r.slot_categories
-      FROM recipes r
-      WHERE NOT EXISTS (SELECT 1 FROM recipe_slots s WHERE s.recipe_id = r.id)
-    `).all();
-    const insert = db.prepare(`INSERT OR IGNORE INTO recipe_slots (recipe_id, slot) VALUES (?, ?)`);
-    for (const row of rows) {
-      let slots = [];
-      try { slots = JSON.parse(row.slot_categories || '[]'); } catch (_) { slots = []; }
-      if (!Array.isArray(slots)) continue;
-      for (const slot of slots) {
-        if (slot === 'breakfast' || slot === 'lunch' || slot === 'dinner') {
-          insert.run(row.id, slot);
+  // One-time backfill: copy legacy recipes.slot_categories JSON into the
+  // recipe_slots join table for any rows that haven't been migrated. Wrapped
+  // in a column-exists check so it's a no-op on fresh databases (Phase 7+).
+  const cols = db.prepare(`PRAGMA table_info(recipes)`).all();
+  const hasLegacySlotCategories = cols.some((c) => c.name === 'slot_categories');
+  if (hasLegacySlotCategories) {
+    const backfill = db.transaction(() => {
+      const rows = db.prepare(`
+        SELECT r.id, r.slot_categories
+        FROM recipes r
+        WHERE NOT EXISTS (SELECT 1 FROM recipe_slots s WHERE s.recipe_id = r.id)
+      `).all();
+      const insert = db.prepare(`INSERT OR IGNORE INTO recipe_slots (recipe_id, slot) VALUES (?, ?)`);
+      for (const row of rows) {
+        let slots = [];
+        try {
+          slots = JSON.parse(row.slot_categories || '[]');
+        } catch (err) {
+          console.warn(`Recipe ${row.id}: malformed slot_categories JSON; recipe will have no slots after migration. Add them manually in the UI.`);
+          continue;
+        }
+        if (!Array.isArray(slots)) {
+          console.warn(`Recipe ${row.id}: slot_categories was not an array; skipping.`);
+          continue;
+        }
+        for (const slot of slots) {
+          if (slot === 'breakfast' || slot === 'lunch' || slot === 'dinner') {
+            insert.run(row.id, slot);
+          }
         }
       }
+    });
+    backfill();
+    // Now retire the legacy column. Phase 5 stopped reading it; Phase 7 stops
+    // writing it. SQLite ≥ 3.35 supports DROP COLUMN. Ignore if unsupported.
+    try {
+      db.exec(`ALTER TABLE recipes DROP COLUMN slot_categories`);
+    } catch (err) {
+      console.warn('Could not drop legacy slot_categories column:', err.message);
     }
-  });
-  backfill();
+  }
 
   return db;
 }

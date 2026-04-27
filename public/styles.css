@@ -342,6 +342,21 @@ input:focus, textarea:focus, select:focus {
   border-color: var(--color-sakura);
 }
 
+/* Slot filter pills tint to their slot color when active so the filter
+   palette matches the meal-chip palette. */
+.filter-pill[data-filter="slot"][data-value="breakfast"].active {
+  background: var(--color-butter-tint);
+  border-color: var(--color-butter);
+}
+.filter-pill[data-filter="slot"][data-value="lunch"].active {
+  background: var(--color-mint-tint);
+  border-color: var(--color-mint);
+}
+.filter-pill[data-filter="slot"][data-value="dinner"].active {
+  background: var(--color-peach-tint);
+  border-color: var(--color-peach);
+}
+
 .filter-search input {
   min-width: 220px;
 }
@@ -626,6 +641,16 @@ input:focus, textarea:focus, select:focus {
 
 body.modal-open {
   overflow: hidden;
+}
+
+/* Dialog primitive inputs */
+.ui-dialog-input {
+  width: 100%;
+  margin-top: var(--space-xs);
+}
+.ui-dialog-body p {
+  margin: 0;
+  line-height: 1.5;
 }
 
 /* ── Detail modal content ───────────────────────────────────────────── */
@@ -1440,6 +1465,73 @@ body.modal-open {
   font-weight: 500;
   color: var(--color-cocoa);
   font-variant-numeric: tabular-nums;
+}
+
+/* Mobile (≤ 640px): minimal pass — keep things usable, not optimized.
+   Parke uses desktop primarily; this is the "doesn't horribly break on a
+   phone if she opens it from a notification" baseline. */
+@media (max-width: 640px) {
+  .app {
+    padding: var(--space-md) var(--space-sm);
+  }
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .tabs {
+    flex-wrap: wrap;
+    padding: 0;
+  }
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  #new-recipe-btn {
+    margin-left: 0;
+  }
+  .ingredient-row {
+    grid-template-columns: 60px 100px 1fr 28px;
+  }
+  .item-row {
+    grid-template-columns: 24px 56px 90px 1fr 28px;
+  }
+  .calendar-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .calendar-title {
+    min-width: 0;
+    font-size: 22px;
+  }
+  #cal-today {
+    margin-left: 0;
+  }
+  .calendar-body.with-side {
+    grid-template-columns: 1fr;
+  }
+  .menu-editor-body {
+    grid-template-columns: 1fr;
+  }
+  .day-cell {
+    min-height: 60px;
+  }
+  .month-dow {
+    font-size: 10px;
+    padding: var(--space-xs) 2px;
+  }
+  .day-view-grid {
+    grid-template-columns: 70px 1fr 1fr 1fr;
+  }
+  .modal {
+    padding: var(--space-md);
+  }
+  .week-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  /* Sunday (7th cell) spans both columns so it doesn't dangle alone. */
+  .week-grid .week-day:nth-child(7) {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Chip while dragging */
