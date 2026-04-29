@@ -17,7 +17,6 @@ Illuminated manuscript × kawaii. See `/Users/emmetpenney/Chorezoi/CHORECAL-DESI
 - **recipes** — templates. `slot_categories` JSON, `tried` bool.
 - **recipe_ingredients** — structured `{name, quantity, unit}` rows. `unit` must be in the canonical list in `utils.js`.
 - **planned_meals** — instances. `(date, slot)` pair (UNIQUE). Exactly one of `recipe_id` or `free_text` is set (DB check constraint). `free_text` supports "leftovers" and "eating out."
-- **menus / menu_slots** — bi-weekly 14-day templates. Materialize onto the calendar; not live-linked.
 - **shopping_lists / shopping_list_items** — persisted list history; merged ingredients from selected recipes.
 
 ## Slots
@@ -41,6 +40,7 @@ Three fixed: `breakfast`, `lunch`, `dinner`. One meal per day per slot
 - [x] Phase 6 — Photo→recipe Claude Code skill (`skills/recipe-shelve.md`)
 - [x] Phase 7 — Polish + deploy
 - [x] Phase 8 — Drop the eater dimension (one meal per (date, slot))
+- [x] Phase 9 — Drop the Menus section
 
 ## Deployment
 - Fly.io app: `parkes-food`

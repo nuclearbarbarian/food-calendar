@@ -76,34 +76,6 @@ CREATE TABLE IF NOT EXISTS cooking_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_cooking_sessions_cook_date ON cooking_sessions(cook_date);
 
-CREATE TABLE IF NOT EXISTS menus (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS menu_slots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  menu_id INTEGER NOT NULL,
-  day_of_cycle INTEGER NOT NULL CHECK (day_of_cycle BETWEEN 0 AND 13),
-  slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner')),
-  recipe_id INTEGER,
-  free_text TEXT,
-  CHECK (
-    (recipe_id IS NOT NULL AND free_text IS NULL)
-    OR (recipe_id IS NULL AND free_text IS NOT NULL)
-    OR (recipe_id IS NULL AND free_text IS NULL)
-  ),
-  FOREIGN KEY (menu_id) REFERENCES menus(id) ON DELETE CASCADE,
-  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_menu_slots_menu ON menu_slots(menu_id);
-CREATE INDEX IF NOT EXISTS idx_menu_slots_menu_day ON menu_slots(menu_id, day_of_cycle);
--- One slot per (menu, day, slot). Phase 8 collapsed away the eater dimension.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_slots_unique
-  ON menu_slots(menu_id, day_of_cycle, slot);
-
 CREATE TABLE IF NOT EXISTS shopping_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,
@@ -149,9 +121,9 @@ function openDb(dbPath) {
   } catch (_) { /* column exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_planned_meals_session ON planned_meals(cooking_session_id)`);
 
-  // Phase 8: drop the `eater` column from planned_meals + menu_slots if it
-  // still exists. Where multiple rows shared the same (date, slot) — one per
-  // eater — collapse to one with priority shared > parke > emmet.
+  // Phase 8: drop the `eater` column from planned_meals if it still exists.
+  // Where multiple rows shared the same (date, slot) — one per eater —
+  // collapse to one with priority shared > parke > emmet.
   const plannedCols = db.prepare(`PRAGMA table_info(planned_meals)`).all();
   if (plannedCols.some((c) => c.name === 'eater')) {
     const collapse = db.transaction(() => {
@@ -184,35 +156,11 @@ function openDb(dbPath) {
     });
     collapse();
   }
-  const menuSlotCols = db.prepare(`PRAGMA table_info(menu_slots)`).all();
-  if (menuSlotCols.some((c) => c.name === 'eater')) {
-    const collapseMenu = db.transaction(() => {
-      db.exec(`
-        DELETE FROM menu_slots WHERE id IN (
-          SELECT id FROM (
-            SELECT id, ROW_NUMBER() OVER (
-              PARTITION BY menu_id, day_of_cycle, slot
-              ORDER BY CASE eater
-                WHEN 'shared' THEN 0
-                WHEN 'parke'  THEN 1
-                WHEN 'emmet'  THEN 2
-                ELSE 3
-              END, id
-            ) AS rn
-            FROM menu_slots
-          ) WHERE rn > 1
-        )
-      `);
-      try {
-        db.exec(`ALTER TABLE menu_slots DROP COLUMN eater`);
-      } catch (err) {
-        console.warn('menu_slots.eater drop failed (SQLite < 3.35?):', err.message);
-        throw err;
-      }
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_slots_unique ON menu_slots(menu_id, day_of_cycle, slot)`);
-    });
-    collapseMenu();
-  }
+  // menu_slots dropped before menus to satisfy the FK.
+  db.transaction(() => {
+    db.exec(`DROP TABLE IF EXISTS menu_slots`);
+    db.exec(`DROP TABLE IF EXISTS menus`);
+  })();
 
   // One-time backfill: copy legacy recipes.slot_categories JSON into the
   // recipe_slots join table for any rows that haven't been migrated. Wrapped
