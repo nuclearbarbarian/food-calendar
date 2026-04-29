@@ -36,21 +36,17 @@ CREATE TABLE IF NOT EXISTS planned_meals (
   free_text TEXT,
   status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'eaten')),
   notes TEXT,
-  cooking_session_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK (
     (recipe_id IS NOT NULL AND free_text IS NULL)
     OR (recipe_id IS NULL AND free_text IS NOT NULL)
   ),
-  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL,
-  FOREIGN KEY (cooking_session_id) REFERENCES cooking_sessions(id) ON DELETE SET NULL
+  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_planned_meals_date ON planned_meals(date);
 -- One meal per (date, slot). Phase 8 collapsed away the eater dimension.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_planned_meals_pair
   ON planned_meals(date, slot);
--- idx_planned_meals_session is created in openDb() after the ALTER TABLE
--- migration adds cooking_session_id to pre-existing databases.
 
 CREATE TABLE IF NOT EXISTS recipe_slots (
   recipe_id INTEGER NOT NULL,
@@ -59,22 +55,6 @@ CREATE TABLE IF NOT EXISTS recipe_slots (
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_recipe_slots_slot ON recipe_slots(slot);
-
-CREATE TABLE IF NOT EXISTS cooking_sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  cook_date TEXT NOT NULL,
-  cook_slot TEXT NOT NULL CHECK (cook_slot IN ('breakfast', 'lunch', 'dinner')),
-  recipe_id INTEGER,
-  free_text TEXT,
-  notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (
-    (recipe_id IS NOT NULL AND free_text IS NULL)
-    OR (recipe_id IS NULL AND free_text IS NOT NULL)
-  ),
-  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_cooking_sessions_cook_date ON cooking_sessions(cook_date);
 
 CREATE TABLE IF NOT EXISTS shopping_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,11 +96,6 @@ function openDb(dbPath) {
   } catch (_) { /* column exists */ }
   db.exec(`UPDATE recipes SET updated_at = created_at WHERE updated_at IS NULL`);
 
-  try {
-    db.exec(`ALTER TABLE planned_meals ADD COLUMN cooking_session_id INTEGER REFERENCES cooking_sessions(id) ON DELETE SET NULL`);
-  } catch (_) { /* column exists */ }
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_planned_meals_session ON planned_meals(cooking_session_id)`);
-
   // Phase 8: drop the `eater` column from planned_meals if it still exists.
   // Where multiple rows shared the same (date, slot) — one per eater —
   // collapse to one with priority shared > parke > emmet.
@@ -161,6 +136,49 @@ function openDb(dbPath) {
     db.exec(`DROP TABLE IF EXISTS menu_slots`);
     db.exec(`DROP TABLE IF EXISTS menus`);
   })();
+
+  // SQLite rejects ALTER TABLE DROP COLUMN when the column is named in an FK
+  // definition, and prepare() of any planned_meals statement fails once the
+  // FK target table is missing. So rebuild planned_meals without the column.
+  // PRAGMA foreign_keys must be toggled outside the transaction.
+  const pmCols = db.prepare(`PRAGMA table_info(planned_meals)`).all();
+  if (pmCols.some((c) => c.name === 'cooking_session_id')) {
+    db.pragma('foreign_keys = OFF');
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE planned_meals_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date TEXT NOT NULL,
+          slot TEXT NOT NULL CHECK (slot IN ('breakfast', 'lunch', 'dinner')),
+          recipe_id INTEGER,
+          free_text TEXT,
+          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'eaten')),
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (
+            (recipe_id IS NOT NULL AND free_text IS NULL)
+            OR (recipe_id IS NULL AND free_text IS NOT NULL)
+          ),
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
+        )
+      `);
+      db.exec(`
+        INSERT INTO planned_meals_new (id, date, slot, recipe_id, free_text, status, notes, created_at)
+        SELECT id, date, slot, recipe_id, free_text, status, notes, created_at FROM planned_meals
+      `);
+      db.exec(`DROP INDEX IF EXISTS idx_planned_meals_date`);
+      db.exec(`DROP INDEX IF EXISTS idx_planned_meals_pair`);
+      db.exec(`DROP INDEX IF EXISTS idx_planned_meals_session`);
+      db.exec(`DROP TABLE planned_meals`);
+      db.exec(`ALTER TABLE planned_meals_new RENAME TO planned_meals`);
+      db.exec(`CREATE INDEX idx_planned_meals_date ON planned_meals(date)`);
+      db.exec(`CREATE UNIQUE INDEX idx_planned_meals_pair ON planned_meals(date, slot)`);
+      db.exec(`DROP TABLE IF EXISTS cooking_sessions`);
+    })();
+    db.pragma('foreign_keys = ON');
+  } else {
+    db.exec(`DROP TABLE IF EXISTS cooking_sessions`);
+  }
 
   // One-time backfill: copy legacy recipes.slot_categories JSON into the
   // recipe_slots join table for any rows that haven't been migrated. Wrapped

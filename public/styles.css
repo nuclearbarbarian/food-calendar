@@ -355,15 +355,6 @@ input:focus, textarea:focus, select:focus {
   min-width: 220px;
 }
 
-.filter-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: var(--text-small);
-  color: var(--color-soft-brown);
-  cursor: pointer;
-}
-
 #new-recipe-btn {
   margin-left: auto;
 }
@@ -403,10 +394,6 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 4px 14px rgba(91, 74, 63, 0.12);
 }
 
-.recipe-card-inactive {
-  opacity: 0.6;
-}
-
 .recipe-card-header {
   display: flex;
   align-items: flex-start;
@@ -419,35 +406,6 @@ input:focus, textarea:focus, select:focus {
   font-weight: 400;
   font-size: 22px;
   line-height: 1.15;
-  color: var(--color-cocoa);
-}
-
-.tried-toggle {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--color-latte);
-  background: var(--color-cream);
-  color: var(--color-soft-brown);
-  font-size: 16px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
-
-.tried-toggle:hover {
-  border-color: var(--color-mint);
-  background: var(--color-mint-tint);
-  color: var(--color-cocoa);
-}
-
-.tried-toggle-on {
-  border-color: var(--color-mint);
-  background: var(--color-mint);
   color: var(--color-cocoa);
 }
 
@@ -478,18 +436,6 @@ input:focus, textarea:focus, select:focus {
   color: var(--color-soft-brown);
 }
 
-.recipe-inactive-badge {
-  position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
-  background: var(--color-latte);
-  color: var(--color-cocoa);
-  font-size: var(--text-small);
-  padding: 2px var(--space-sm);
-  border-radius: var(--radius-pill);
-  font-weight: 600;
-}
-
 /* ── Slot badges (color-coded per slot) ─────────────────────────────── */
 
 .slot-badge {
@@ -518,27 +464,6 @@ input:focus, textarea:focus, select:focus {
 .slot-dinner {
   background: var(--color-peach-tint);
   border: 1px solid var(--color-peach);
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px var(--space-sm);
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.status-tried {
-  background: var(--color-mint);
-  color: var(--color-cocoa);
-}
-
-.status-untried {
-  background: var(--color-cream);
-  border: 1px solid var(--color-latte);
-  color: var(--color-soft-brown);
 }
 
 /* ── Modals ─────────────────────────────────────────────────────────── */
@@ -787,11 +712,6 @@ body.modal-open {
 .checkbox-pill:has(input:checked) {
   background: var(--color-sakura-tint);
   border-color: var(--color-sakura);
-}
-
-.checkbox-pill-lg {
-  font-size: var(--text-body);
-  padding: var(--space-sm) var(--space-lg);
 }
 
 .ingredient-rows {
@@ -1098,11 +1018,6 @@ body.modal-open {
   min-width: 0;
 }
 
-.meal-chip .session-glyph {
-  font-size: 10px;
-  opacity: 0.8;
-}
-
 .day-overflow {
   font-size: 11px;
   color: var(--color-soft-brown);
@@ -1289,6 +1204,11 @@ body.modal-open {
   width: 100%;
 }
 
+#meal-view-recipe {
+  align-self: flex-start;
+  margin-top: var(--space-xs);
+}
+
 .quick-pills {
   display: flex;
   flex-wrap: wrap;
@@ -1308,51 +1228,6 @@ body.modal-open {
 .quick-pill:hover {
   background: var(--color-lavender-tint);
   border-color: var(--color-lavender);
-}
-
-/* Cooking session modal */
-
-.cook-intro {
-  margin-bottom: var(--space-lg);
-  color: var(--color-soft-brown);
-  font-style: italic;
-}
-
-.form-label-inline {
-  font-family: var(--font-body);
-  font-size: var(--text-small);
-  font-weight: 600;
-  color: var(--color-cocoa);
-  margin-right: var(--space-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.cook-serves-rows {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-.serves-row {
-  display: grid;
-  grid-template-columns: 1fr 120px 120px 32px;
-  gap: var(--space-xs);
-  align-items: center;
-}
-
-.serves-remove {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--color-soft-brown);
-}
-
-.serves-remove:hover {
-  background: var(--color-error-tint);
-  color: var(--color-error);
 }
 
 /* Day view dropped in Phase 8 — its rules removed. */

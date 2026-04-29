@@ -128,10 +128,6 @@ function renderMealRow(meal, accent, tint) {
     ? `color: ${COLORS.softBrown}; text-decoration: line-through;`
     : `color: ${COLORS.cocoa};`;
 
-  const sessionGlyph = meal.cooking_session_id
-    ? `<span title="From a cooking session" style="margin-right: 4px;">🍳</span>`
-    : '';
-
   const byline = meal.recipe_source
     ? `<div style="color: ${COLORS.softBrown}; font-style: italic; font-size: 13px; margin-top: 2px;">
          via ${escapeHtml(meal.recipe_source)}
@@ -158,7 +154,7 @@ function renderMealRow(meal, accent, tint) {
         ${escapeHtml(SLOT_LABELS[meal.slot])}
       </div>
       <div style="font-size: 16px; font-weight: 600; ${titleStyle}">
-        ${sessionGlyph}${escapeHtml(title)}
+        ${escapeHtml(title)}
       </div>
       ${byline}
       ${notes}
@@ -178,9 +174,8 @@ function buildDigestText({ date, meals }) {
 
   for (const meal of sortBySlot(meals)) {
     const prefix = meal.status === 'eaten' ? '[eaten] ' : '';
-    const glyph = meal.cooking_session_id ? '(from cook session) ' : '';
     const title = mealTitle(meal);
-    lines.push(`  ${SLOT_LABELS[meal.slot]}: ${prefix}${glyph}${title}`);
+    lines.push(`  ${SLOT_LABELS[meal.slot]}: ${prefix}${title}`);
     if (meal.recipe_source) lines.push(`    via ${meal.recipe_source}`);
     if (meal.slot === 'dinner' && meal.recipe_steps && meal.recipe_steps.trim()) {
       lines.push(`    Prep: ${meal.recipe_steps.replace(/\s+/g, ' ').trim()}`);

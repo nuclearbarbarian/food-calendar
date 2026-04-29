@@ -89,13 +89,12 @@ const stmts = {
     ORDER BY sort_order, id
   `),
   insertRecipe: db.prepare(`
-    INSERT INTO recipes (title, tried, source, steps, notes, updated_at)
-    VALUES (@title, @tried, @source, @steps, @notes, datetime('now'))
+    INSERT INTO recipes (title, source, steps, notes, updated_at)
+    VALUES (@title, @source, @steps, @notes, datetime('now'))
   `),
   updateRecipe: db.prepare(`
     UPDATE recipes
     SET title = @title,
-        tried = @tried,
         source = @source,
         steps = @steps,
         notes = @notes,
@@ -109,18 +108,22 @@ const stmts = {
     INSERT INTO recipe_ingredients (recipe_id, name, quantity, unit, sort_order)
     VALUES (@recipe_id, @name, @quantity, @unit, @sort_order)
   `),
-  setTried: db.prepare(
-    `UPDATE recipes SET tried = ?, updated_at = datetime('now') WHERE id = ?`
+  deleteRecipe: db.prepare(`DELETE FROM recipes WHERE id = ?`),
+  countPlannedMealsForRecipe: db.prepare(
+    `SELECT COUNT(*) AS n FROM planned_meals WHERE recipe_id = ?`
   ),
-  setActive: db.prepare(
-    `UPDATE recipes SET active = ?, updated_at = datetime('now') WHERE id = ?`
+  // planned_meals has a CHECK requiring exactly one of (recipe_id, free_text)
+  // to be set, so we can't rely on ON DELETE SET NULL — we must convert
+  // referencing rows to free_text first.
+  orphanPlannedMealsForRecipe: db.prepare(
+    `UPDATE planned_meals SET recipe_id = NULL, free_text = @free_text WHERE recipe_id = @id`
   ),
 
   // Planned meals
   listPlannedMealsInRange: db.prepare(`
     SELECT
       p.id, p.date, p.slot, p.recipe_id, p.free_text,
-      p.status, p.notes, p.cooking_session_id, p.created_at,
+      p.status, p.notes, p.created_at,
       r.title AS recipe_title, r.source AS recipe_source, r.steps AS recipe_steps
     FROM planned_meals p
     LEFT JOIN recipes r ON r.id = p.recipe_id
@@ -130,15 +133,15 @@ const stmts = {
   getPlannedMeal: db.prepare(`
     SELECT
       p.id, p.date, p.slot, p.recipe_id, p.free_text,
-      p.status, p.notes, p.cooking_session_id, p.created_at,
+      p.status, p.notes, p.created_at,
       r.title AS recipe_title
     FROM planned_meals p
     LEFT JOIN recipes r ON r.id = p.recipe_id
     WHERE p.id = ?
   `),
   insertPlannedMeal: db.prepare(`
-    INSERT INTO planned_meals (date, slot, recipe_id, free_text, status, notes, cooking_session_id)
-    VALUES (@date, @slot, @recipe_id, @free_text, @status, @notes, @cooking_session_id)
+    INSERT INTO planned_meals (date, slot, recipe_id, free_text, status, notes)
+    VALUES (@date, @slot, @recipe_id, @free_text, @status, @notes)
   `),
   updatePlannedMeal: db.prepare(`
     UPDATE planned_meals
@@ -151,20 +154,6 @@ const stmts = {
     WHERE id = @id
   `),
   deletePlannedMeal: db.prepare(`DELETE FROM planned_meals WHERE id = ?`),
-
-  // Cooking sessions
-  insertCookingSession: db.prepare(`
-    INSERT INTO cooking_sessions (cook_date, cook_slot, recipe_id, free_text, notes)
-    VALUES (@cook_date, @cook_slot, @recipe_id, @free_text, @notes)
-  `),
-  getCookingSession: db.prepare(`
-    SELECT id, cook_date, cook_slot, recipe_id, free_text, notes, created_at
-    FROM cooking_sessions WHERE id = ?
-  `),
-  unlinkSessionMeals: db.prepare(`
-    UPDATE planned_meals SET cooking_session_id = NULL WHERE cooking_session_id = ?
-  `),
-  deleteCookingSession: db.prepare(`DELETE FROM cooking_sessions WHERE id = ?`),
 
   // Digest dedupe
   getDigestSent: db.prepare(`SELECT date, sent_at, resend_id FROM digests_sent WHERE date = ?`),
@@ -247,7 +236,6 @@ function validateRecipeBody(body) {
     if (!isSlot(s)) errors.push(`invalid slot: ${s}`);
   }
 
-  const tried = toBool01(body.tried);
   const source = body.source == null ? null : String(body.source).slice(0, 500);
   const steps = body.steps == null ? null : String(body.steps).slice(0, MAX_STEPS_LENGTH);
   const notes = body.notes == null ? null : String(body.notes).slice(0, MAX_NOTES_LENGTH);
@@ -296,7 +284,6 @@ function validateRecipeBody(body) {
     clean: {
       title,
       slots: dedupedSlots,
-      tried,
       source,
       steps,
       notes,
@@ -336,12 +323,11 @@ app.get('/api/config', (req, res) => {
 });
 
 app.get('/api/recipes', (req, res) => {
-  const include_inactive = req.query.include_inactive === '1' ? 1 : 0;
   const slotParam = typeof req.query.slot === 'string' ? req.query.slot : '';
   if (slotParam && !isSlot(slotParam)) {
     return res.status(400).json({ error: `invalid slot: ${slotParam}` });
   }
-  const rows = stmts.listRecipes.all({ include_inactive, slot_filter: slotParam });
+  const rows = stmts.listRecipes.all({ include_inactive: 1, slot_filter: slotParam });
   res.json(rows.map(hydrate));
 });
 
@@ -351,7 +337,8 @@ app.get('/api/recipes/:id', (req, res) => {
   const recipe = stmts.getRecipe.get(id);
   if (!recipe) return res.status(404).json({ error: 'recipe not found' });
   const ingredients = stmts.getIngredients.all(id);
-  res.json({ ...hydrate(recipe), ingredients });
+  const { n } = stmts.countPlannedMealsForRecipe.get(id);
+  res.json({ ...hydrate(recipe), ingredients, planned_meal_count: n });
 });
 
 app.post('/api/recipes', (req, res) => {
@@ -361,7 +348,6 @@ app.post('/api/recipes', (req, res) => {
   const create = db.transaction(() => {
     const { lastInsertRowid } = stmts.insertRecipe.run({
       title: clean.title,
-      tried: clean.tried,
       source: clean.source,
       steps: clean.steps,
       notes: clean.notes,
@@ -396,7 +382,6 @@ app.put('/api/recipes/:id', (req, res) => {
     const result = stmts.updateRecipe.run({
       id,
       title: clean.title,
-      tried: clean.tried,
       source: clean.source,
       steps: clean.steps,
       notes: clean.notes,
@@ -423,22 +408,17 @@ app.put('/api/recipes/:id', (req, res) => {
   res.json({ ...hydrate(recipe), ingredients });
 });
 
-app.patch('/api/recipes/:id/tried', (req, res) => {
+app.delete('/api/recipes/:id', (req, res) => {
   const id = parseRecipeId(req.params.id);
   if (id == null) return res.status(400).json({ error: 'invalid id' });
-  const tried = toBool01(req.body && req.body.tried);
-  const result = stmts.setTried.run(tried, id);
-  if (result.changes === 0) return res.status(404).json({ error: 'recipe not found' });
-  res.json({ id, tried: tried === 1 });
-});
-
-app.patch('/api/recipes/:id/active', (req, res) => {
-  const id = parseRecipeId(req.params.id);
-  if (id == null) return res.status(400).json({ error: 'invalid id' });
-  const active = toBool01(req.body && req.body.active);
-  const result = stmts.setActive.run(active, id);
-  if (result.changes === 0) return res.status(404).json({ error: 'recipe not found' });
-  res.json({ id, active: active === 1 });
+  const recipe = stmts.getRecipe.get(id);
+  if (!recipe) return res.status(404).json({ error: 'recipe not found' });
+  const run = db.transaction(() => {
+    stmts.orphanPlannedMealsForRecipe.run({ id, free_text: `(deleted: ${recipe.title})` });
+    stmts.deleteRecipe.run(id);
+  });
+  run();
+  res.status(204).end();
 });
 
 // ── Planned meals ─────────────────────────────────────────────────────────
@@ -558,7 +538,6 @@ app.post('/api/planned-meals', (req, res) => {
       free_text: clean.free_text,
       status: clean.status,
       notes: clean.notes,
-      cooking_session_id: null,
     });
     const row = stmts.getPlannedMeal.get(result.lastInsertRowid);
     res.status(201).json(hydrateMeal(row));
@@ -605,104 +584,6 @@ app.delete('/api/planned-meals/:id', (req, res) => {
   if (id == null) return res.status(400).json({ error: 'invalid id' });
   const result = stmts.deletePlannedMeal.run(id);
   if (result.changes === 0) return res.status(404).json({ error: 'meal not found' });
-  res.status(204).end();
-});
-
-// ── Cooking sessions ──────────────────────────────────────────────────────
-// One cook event feeds N planned meals. Delete-with-unlink: the meals stay,
-// but lose their cooking_session_id so they're independent planned meals.
-
-app.post('/api/cooking-sessions', (req, res) => {
-  const body = req.body || {};
-  const errors = [];
-
-  if (typeof body.cook_date !== 'string' || !DATE_RE.test(body.cook_date)) {
-    errors.push('cook_date must be YYYY-MM-DD');
-  }
-  if (!SLOTS_SET.has(body.cook_slot)) {
-    errors.push(`invalid cook_slot: ${body.cook_slot}`);
-  }
-
-  const hasRecipe = body.recipe_id != null && body.recipe_id !== '';
-  const hasFreeText = typeof body.free_text === 'string' && body.free_text.trim().length > 0;
-  if (hasRecipe === hasFreeText) {
-    errors.push('set exactly one of recipe_id or free_text');
-  }
-  let recipe_id = null;
-  let free_text = null;
-  if (hasRecipe) {
-    const rid = Number(body.recipe_id);
-    if (!Number.isInteger(rid) || rid <= 0) errors.push('invalid recipe_id');
-    else recipe_id = rid;
-  } else if (hasFreeText) {
-    free_text = body.free_text.trim().slice(0, 200);
-  }
-
-  const serves = Array.isArray(body.serves) ? body.serves : [];
-  if (serves.length === 0) errors.push('serves must have at least one meal');
-  if (serves.length > 30) errors.push('serves too many (max 30)');
-  const cleanServes = [];
-  serves.forEach((s, i) => {
-    if (!s || typeof s !== 'object') { errors.push(`serves[${i}]: invalid`); return; }
-    if (typeof s.date !== 'string' || !DATE_RE.test(s.date)) { errors.push(`serves[${i}]: bad date`); return; }
-    if (!SLOTS_SET.has(s.slot)) { errors.push(`serves[${i}]: bad slot`); return; }
-    cleanServes.push({ date: s.date, slot: s.slot });
-  });
-
-  const notes = body.notes == null ? null : String(body.notes).slice(0, 1000);
-
-  if (errors.length) return res.status(400).json({ errors });
-
-  const create = db.transaction(() => {
-    const sessionResult = stmts.insertCookingSession.run({
-      cook_date: body.cook_date,
-      cook_slot: body.cook_slot,
-      recipe_id,
-      free_text,
-      notes,
-    });
-    const sessionId = sessionResult.lastInsertRowid;
-    const createdMealIds = [];
-    for (const s of cleanServes) {
-      const r = stmts.insertPlannedMeal.run({
-        date: s.date,
-        slot: s.slot,
-        recipe_id,
-        free_text,
-        status: 'planned',
-        notes: null,
-        cooking_session_id: sessionId,
-      });
-      createdMealIds.push(r.lastInsertRowid);
-    }
-    return { sessionId, createdMealIds };
-  });
-
-  try {
-    const { sessionId, createdMealIds } = create();
-    const session = stmts.getCookingSession.get(sessionId);
-    const meals = createdMealIds.map((id) => hydrateMeal(stmts.getPlannedMeal.get(id)));
-    res.status(201).json({ session, meals });
-  } catch (err) {
-    if (isUniqueCollision(err)) {
-      return res.status(409).json({
-        error: 'One of the serves rows conflicts with an existing meal. Remove it or clear the existing meal first.',
-      });
-    }
-    throw err;
-  }
-});
-
-app.delete('/api/cooking-sessions/:id', (req, res) => {
-  const id = parseRecipeId(req.params.id);
-  if (id == null) return res.status(400).json({ error: 'invalid id' });
-  const existing = stmts.getCookingSession.get(id);
-  if (!existing) return res.status(404).json({ error: 'session not found' });
-  const run = db.transaction(() => {
-    stmts.unlinkSessionMeals.run(id);
-    stmts.deleteCookingSession.run(id);
-  });
-  run();
   res.status(204).end();
 });
 

@@ -8,9 +8,7 @@
     recipes: [],
     filters: {
       slots: new Set(),
-      tried: 'all',
       q: '',
-      includeInactive: false,
     },
     editing: null,   // { isNew: true } | { isNew: false, id }
     detail: null,    // full recipe currently displayed in detail modal
@@ -19,7 +17,6 @@
   const EMPTY_RECIPE = Object.freeze({
     title: '',
     slot_categories: [],
-    tried: false,
     source: '',
     steps: '',
     notes: '',
@@ -146,13 +143,11 @@
 
   const API = {
     config: () => api('GET', '/api/config'),
-    listRecipes: (includeInactive) =>
-      api('GET', `/api/recipes${includeInactive ? '?include_inactive=1' : ''}`),
+    listRecipes: () => api('GET', '/api/recipes'),
     getRecipe: (id) => api('GET', `/api/recipes/${id}`),
     createRecipe: (payload) => api('POST', '/api/recipes', payload),
     updateRecipe: (id, payload) => api('PUT', `/api/recipes/${id}`, payload),
-    setTried: (id, tried) => api('PATCH', `/api/recipes/${id}/tried`, { tried: tried ? 1 : 0 }),
-    setActive: (id, active) => api('PATCH', `/api/recipes/${id}/active`, { active: active ? 1 : 0 }),
+    deleteRecipe: (id) => api('DELETE', `/api/recipes/${id}`),
   };
 
   // ── Tabs ─────────────────────────────────────────────────────────────────
@@ -196,35 +191,19 @@
         renderLibrary();
       });
     }
-    for (const btn of $$('.filter-pill[data-filter="tried"]')) {
-      btn.addEventListener('click', () => {
-        state.filters.tried = btn.dataset.value;
-        for (const t of $$('.filter-pill[data-filter="tried"]')) {
-          t.classList.toggle('active', t === btn);
-        }
-        renderLibrary();
-      });
-    }
     $('recipe-search').addEventListener('input', (e) => {
       state.filters.q = e.target.value.trim().toLowerCase();
-      renderLibrary();
-    });
-    $('show-inactive').addEventListener('change', async (e) => {
-      state.filters.includeInactive = e.target.checked;
-      await loadRecipes();
       renderLibrary();
     });
   }
 
   function filteredRecipes() {
-    const { slots, tried, q } = state.filters;
+    const { slots, q } = state.filters;
     return state.recipes.filter((r) => {
       if (slots.size > 0) {
         const overlap = r.slot_categories.some((s) => slots.has(s));
         if (!overlap) return false;
       }
-      if (tried === 'tried' && !r.tried) return false;
-      if (tried === 'untried' && r.tried) return false;
       if (q && !r.title.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -233,7 +212,7 @@
   // ── Library rendering ────────────────────────────────────────────────────
 
   async function loadRecipes() {
-    state.recipes = await API.listRecipes(state.filters.includeInactive);
+    state.recipes = await API.listRecipes();
   }
 
   function renderLibrary() {
@@ -279,7 +258,7 @@
 
   function renderCard(recipe) {
     const card = el('article', {
-      class: `recipe-card${recipe.active ? '' : ' recipe-card-inactive'}`,
+      class: 'recipe-card',
       dataset: { recipeId: String(recipe.id) },
       onclick: () => openDetailModal(recipe.id),
     });
@@ -287,20 +266,7 @@
     const titleBar = el(
       'header',
       { class: 'recipe-card-header' },
-      el('h3', { class: 'recipe-card-title' }, recipe.title),
-      el(
-        'button',
-        {
-          class: `tried-toggle${recipe.tried ? ' tried-toggle-on' : ''}`,
-          title: recipe.tried ? 'Marked as tried — click to unmark' : 'Mark as tried',
-          'aria-label': recipe.tried ? 'Mark as not yet tried' : 'Mark as tried',
-          onclick: (e) => {
-            e.stopPropagation();
-            handleToggleTried(recipe);
-          },
-        },
-        recipe.tried ? '✓' : '○'
-      )
+      el('h3', { class: 'recipe-card-title' }, recipe.title)
     );
 
     const meta = el('div', { class: 'recipe-card-meta' }, ...renderSlotBadges(recipe.slot_categories));
@@ -325,22 +291,7 @@
         )
       );
     }
-    if (!recipe.active) {
-      card.appendChild(el('div', { class: 'recipe-inactive-badge' }, 'Deactivated'));
-    }
     return card;
-  }
-
-  async function handleToggleTried(recipe) {
-    const nextTried = !recipe.tried;
-    try {
-      await API.setTried(recipe.id, nextTried);
-      recipe.tried = nextTried;
-      renderLibrary();
-    } catch (err) {
-      console.error('Tried toggle failed', err);
-      alertDialog({ title: 'Couldn\'t update', body: 'Could not update tried status. Try again?' });
-    }
   }
 
   // ── Detail modal ─────────────────────────────────────────────────────────
@@ -355,13 +306,6 @@
       body.innerHTML = '';
 
       const meta = el('div', { class: 'detail-meta' }, ...renderSlotBadges(recipe.slot_categories));
-      meta.appendChild(
-        el(
-          'span',
-          { class: `status-badge${recipe.tried ? ' status-tried' : ' status-untried'}` },
-          recipe.tried ? '✓ Tried' : '○ Want to make'
-        )
-      );
       if (recipe.source) {
         meta.appendChild(el('span', { class: 'detail-source' }, recipe.source));
       }
@@ -388,9 +332,6 @@
         body.appendChild(el('div', { class: 'detail-notes' }, recipe.notes));
       }
 
-      $('detail-deactivate').hidden = !recipe.active;
-      $('detail-reactivate').hidden = recipe.active;
-
       showModal('detail-modal');
     } catch (err) {
       console.error('Open detail failed', err);
@@ -405,34 +346,24 @@
       hideModal('detail-modal');
       openEditModal(recipe);
     });
-    $('detail-deactivate').addEventListener('click', async () => {
+    $('detail-delete').addEventListener('click', async () => {
       if (!state.detail) return;
-      const btn = $('detail-deactivate');
+      const btn = $('detail-delete');
       if (btn.disabled) return;
+      const recipe = state.detail;
+      const count = recipe.planned_meal_count || 0;
+      const body = count === 0
+        ? 'This recipe will be permanently deleted.'
+        : `This recipe will be permanently deleted. ${count} planned meal${count === 1 ? '' : 's'} on the calendar will be relabeled “(deleted: ${recipe.title}).”`;
       if (!await confirmDialog({
-        title: 'Deactivate recipe?',
-        body: 'It will be hidden from the library but past planned meals will keep their reference.',
-        confirmLabel: 'Deactivate',
+        title: 'Delete recipe?',
+        body,
+        confirmLabel: 'Delete',
         danger: true,
       })) return;
       btn.disabled = true;
       try {
-        await API.setActive(state.detail.id, false);
-        hideModal('detail-modal');
-        state.detail = null;
-        await loadRecipes();
-        renderLibrary();
-      } finally {
-        btn.disabled = false;
-      }
-    });
-    $('detail-reactivate').addEventListener('click', async () => {
-      if (!state.detail) return;
-      const btn = $('detail-reactivate');
-      if (btn.disabled) return;
-      btn.disabled = true;
-      try {
-        await API.setActive(state.detail.id, true);
+        await API.deleteRecipe(recipe.id);
         hideModal('detail-modal');
         state.detail = null;
         await loadRecipes();
@@ -461,7 +392,6 @@
     for (const cb of $$('input[name="slot"]', form)) {
       cb.checked = recipe.slot_categories.includes(cb.value);
     }
-    $('field-tried').checked = !!recipe.tried;
 
     const rows = $('ingredient-rows');
     rows.innerHTML = '';
@@ -543,7 +473,6 @@
     const slots = $$('input[name="slot"]:checked', form).map((cb) => cb.value);
     if (slots.length === 0) errors.push('Pick at least one meal slot.');
 
-    const tried = $('field-tried').checked ? 1 : 0;
     const source = $('field-source').value.trim() || null;
     const steps = $('field-steps').value.trim() || null;
     const notes = $('field-notes').value.trim() || null;
@@ -572,7 +501,7 @@
       return;
     }
 
-    const payload = { title, slot_categories: slots, tried, source, steps, notes, ingredients };
+    const payload = { title, slot_categories: slots, source, steps, notes, ingredients };
 
     saveBtn.disabled = true;
     try {
@@ -717,11 +646,9 @@
         renderCalendar();
       });
     }
-    $('cal-cook').addEventListener('click', () => openCookModal());
     $('cal-send-digest').addEventListener('click', handleSendDigest);
 
     initMealModal();
-    initCookModal();
   }
 
   async function handleSendDigest() {
@@ -882,7 +809,6 @@
         title: `${meal.slot.charAt(0).toUpperCase() + meal.slot.slice(1)} · ${mealTitle(meal)}`,
       },
       el('span', { class: 'slot-letter', 'aria-hidden': 'true' }, SLOT_LETTERS[meal.slot]),
-      meal.cooking_session_id ? el('span', { class: 'session-glyph', 'aria-hidden': 'true' }, '🍳') : null,
       el('span', { class: 'chip-body' }, mealTitle(meal))
     );
 
@@ -1029,7 +955,6 @@
         class: `meal-summary${meal.status === 'eaten' ? ' eaten' : ''}`,
         onclick: () => openMealModal({ mode: 'edit', meal }),
       },
-      meal.cooking_session_id ? el('span', { 'aria-hidden': 'true' }, '🍳 ') : null,
       el('span', { class: 'meal-summary-title' }, mealTitle(meal))
     );
   }
@@ -1068,13 +993,24 @@
       if ($('meal-recipe').value) {
         $('meal-free-text').value = '';
       }
+      syncViewRecipeLink();
+    });
+    $('meal-view-recipe').addEventListener('click', () => {
+      const id = $('meal-recipe').value;
+      if (!id) return;
+      hideModal('meal-modal');
+      openDetailModal(Number(id));
     });
     $('meal-free-text').addEventListener('input', () => {
-      if ($('meal-free-text').value.trim()) $('meal-recipe').value = '';
+      if ($('meal-free-text').value.trim()) {
+        $('meal-recipe').value = '';
+        syncViewRecipeLink();
+      }
     });
     for (const btn of $$('#meal-free-row .quick-pill')) {
       btn.addEventListener('click', () => {
         $('meal-recipe').value = '';
+        syncViewRecipeLink();
         $('meal-free-text').value = btn.dataset.quick;
       });
     }
@@ -1107,15 +1043,11 @@
     const sel = $('meal-recipe');
     sel.innerHTML = '<option value="">— Free text / leftovers / eating out —</option>';
     try {
-      // Include inactive in edit mode so a deactivated recipe the meal still
-      // references stays selectable. In create mode only show active recipes.
-      const params = new URLSearchParams({ slot: actual.slot });
-      if (mode === 'edit') params.set('include_inactive', '1');
-      const recipes = await api('GET', `/api/recipes?${params.toString()}`);
+      const recipes = await api('GET', `/api/recipes?slot=${encodeURIComponent(actual.slot)}`);
       recipes.sort((a, b) => a.title.localeCompare(b.title));
       let foundCurrent = false;
       for (const r of recipes) {
-        const opt = el('option', { value: String(r.id) }, r.title + (r.active ? '' : ' (deactivated)'));
+        const opt = el('option', { value: String(r.id) }, r.title);
         if (String(r.id) === current.recipeId) { opt.selected = true; foundCurrent = true; }
         sel.appendChild(opt);
       }
@@ -1137,9 +1069,14 @@
     $('meal-notes').value = current.notes || '';
     $('meal-errors').hidden = true;
     $('meal-errors').textContent = '';
+    syncViewRecipeLink();
 
     showModal('meal-modal');
     sel.focus();
+  }
+
+  function syncViewRecipeLink() {
+    $('meal-view-recipe').hidden = !$('meal-recipe').value;
   }
 
   async function handleMealSave() {
@@ -1217,131 +1154,6 @@
 
   function showMealError(msgs) {
     const box = $('meal-errors');
-    box.innerHTML = '';
-    for (const m of msgs) box.appendChild(el('div', {}, m));
-    box.hidden = false;
-  }
-
-  // ── Cooking session modal ────────────────────────────────────────────────
-
-  function initCookModal() {
-    $('cook-add-serves').addEventListener('click', () => addServesRow());
-    $('cook-save').addEventListener('click', handleCookSave);
-    $('cook-recipe').addEventListener('change', () => {
-      if ($('cook-recipe').value) $('cook-free-text').value = '';
-    });
-    $('cook-free-text').addEventListener('input', () => {
-      if ($('cook-free-text').value.trim()) $('cook-recipe').value = '';
-    });
-  }
-
-  async function openCookModal() {
-    const today = isoToday();
-    $('cook-date').value = today;
-    $('cook-slot').value = 'dinner';
-    $('cook-free-text').value = '';
-    $('cook-notes').value = '';
-    $('cook-errors').hidden = true;
-    $('cook-errors').textContent = '';
-
-    const sel = $('cook-recipe');
-    sel.innerHTML = '<option value="">— Free text / leftovers —</option>';
-    try {
-      const recipes = await api('GET', '/api/recipes');
-      recipes.sort((a, b) => a.title.localeCompare(b.title));
-      for (const r of recipes) {
-        sel.appendChild(el('option', { value: String(r.id) }, r.title));
-      }
-    } catch (err) {
-      console.error('Load recipes failed', err);
-    }
-
-    $('cook-serves-rows').innerHTML = '';
-    // Default: two serve rows for dinner on cook date and the next day.
-    addServesRow({ date: today, slot: 'dinner' });
-    addServesRow({ date: addDays(today, 1), slot: 'dinner' });
-
-    showModal('cook-modal');
-    sel.focus();
-  }
-
-  function addServesRow(prefill) {
-    const rows = $('cook-serves-rows');
-    const dateInput = el('input', {
-      type: 'date',
-      value: prefill ? prefill.date : $('cook-date').value,
-    });
-    const slotSel = el('select', {});
-    for (const s of ['breakfast', 'lunch', 'dinner']) {
-      const opt = el('option', { value: s }, s[0].toUpperCase() + s.slice(1));
-      if (prefill && prefill.slot === s) opt.selected = true;
-      else if (!prefill && s === 'dinner') opt.selected = true;
-      slotSel.appendChild(opt);
-    }
-    const row = el(
-      'div',
-      { class: 'serves-row' },
-      dateInput,
-      slotSel,
-      el(
-        'button',
-        {
-          type: 'button',
-          class: 'serves-remove',
-          'aria-label': 'Remove meal',
-          onclick: () => row.remove(),
-        },
-        '✕'
-      )
-    );
-    rows.appendChild(row);
-  }
-
-  async function handleCookSave() {
-    const btn = $('cook-save');
-    if (btn.disabled) return;
-    const errors = [];
-    const recipeId = $('cook-recipe').value;
-    const freeText = $('cook-free-text').value.trim();
-    if (!recipeId && !freeText) errors.push('Pick a recipe or type free text.');
-    if (recipeId && freeText) errors.push('Choose either a recipe or free text.');
-    const cookDate = $('cook-date').value;
-    if (!cookDate) errors.push('Pick a cook date.');
-    const cookSlot = $('cook-slot').value;
-
-    const serves = $$('.serves-row', $('cook-serves-rows'))
-      .map((row) => {
-        const [dateInput, slotSel] = row.querySelectorAll('input, select');
-        return { date: dateInput.value, slot: slotSel.value };
-      })
-      .filter((s) => s.date);
-    if (serves.length === 0) errors.push('Add at least one meal the cooking feeds.');
-
-    if (errors.length) return showCookError(errors);
-
-    const body = {
-      cook_date: cookDate,
-      cook_slot: cookSlot,
-      notes: $('cook-notes').value.trim() || null,
-      serves,
-    };
-    if (recipeId) body.recipe_id = Number(recipeId);
-    else body.free_text = freeText;
-
-    btn.disabled = true;
-    try {
-      await api('POST', '/api/cooking-sessions', body);
-      hideModal('cook-modal');
-      await renderCalendar();
-    } catch (err) {
-      showCookError(extractErrorMessages(err));
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  function showCookError(msgs) {
-    const box = $('cook-errors');
     box.innerHTML = '';
     for (const m of msgs) box.appendChild(el('div', {}, m));
     box.hidden = false;
