@@ -1164,7 +1164,7 @@ body.modal-open {
    and the prior .slot-group / .slot-group-title pattern. */
 .slot-row {
   display: grid;
-  grid-template-columns: 80px 1fr auto;
+  grid-template-columns: 100px 1fr auto;
   gap: var(--space-sm);
   align-items: center;
   padding: var(--space-xs) 0;
