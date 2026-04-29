@@ -206,12 +206,6 @@ input:focus, textarea:focus, select:focus {
   color: var(--color-cocoa);
 }
 
-.app-subtitle {
-  font-family: var(--font-display-alt);
-  font-size: var(--text-decorative);
-  color: var(--color-soft-brown);
-}
-
 /* Tabs */
 
 .tabs {
